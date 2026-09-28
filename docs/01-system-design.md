@@ -266,7 +266,15 @@ success is not.
 ## 9. Design process
 
 1. **Week 0, before code:** write ADRs for D1, D2, D3, D12, D10. These are the ones that are expensive
-   to reverse.
+   to reverse. **Done** — see [`docs/adr/`](./adr/README.md):
+
+   | Decision | Record |
+   |---|---|
+   | D1, D2 (CRDT model, granularity) | [ADR-0001](./adr/0001-crdt-merge-model-and-granularity.md) |
+   | D3, D5 (shape representation, z-order) | [ADR-0002](./adr/0002-shape-representation-and-z-order.md) |
+   | D12 (restore semantics) | [ADR-0003](./adr/0003-restore-is-a-forward-update.md) |
+   | D10, D11 (authorization point, server authority) | [ADR-0004](./adr/0004-authorization-before-apply.md) |
+   | D17 (hosting) | [ADR-0005](./adr/0005-hosting-option-a-first.md) |
 2. **Every phase gate:** re-read the risk register, update likelihood and impact, note what changed.
 3. **Every bug that costs more than 4 hours:** write it up. That write-up becomes the case study
    ([root README §13](../README.md#13-portfolio-deliverables-checklist)).
@@ -278,7 +286,8 @@ success is not.
 System design is done when:
 
 - [ ] Goals and non-goals are agreed and no new feature in the roadmap fails the one-sentence test
-- [ ] Every "Decision" row has an ADR in `docs/adr/` before the dependent code lands
+- [x] The five expensive-to-reverse decisions have ADRs in `docs/adr/` (D1, D2, D3, D5, D10, D11, D12, D17)
+- [ ] Every remaining "Decision" row has an ADR before its dependent code lands, or a note saying why not
 - [ ] All 14 risks have a named mitigation with a location in these docs
 - [ ] Every NFR has a measurement method and a home dashboard
 - [ ] The 8 questions in the [index](./README.md#questions-pending-sign-off) are signed off, and each becomes an ADR

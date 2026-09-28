@@ -133,7 +133,13 @@ flowchart LR
 5. **Awareness** (cursors, selections, names) rides a separate ephemeral channel. It is never persisted.
 6. The server debounces writes: it appends updates to Postgres, and periodically **compacts** them into a single snapshot.
 
-### Key design decisions (write each as an ADR)
+### Key design decisions
+
+The five expensive-to-reverse ones have full records in [`docs/adr/`](./docs/adr/README.md): CRDT
+model and granularity, shape representation and z-order, restore semantics, the authorization
+enforcement point, and hosting. The rest of the decision table lives in
+[`docs/01-system-design.md`](./docs/01-system-design.md#5-key-design-decisions) with its rejected
+alternatives.
 | Decision | Choice | Why |
 |---|---|---|
 | CRDT library | **Yjs** | Fast, compact binary format, mature ecosystem (Tiptap/ProseMirror bindings, IndexedDB, awareness) |
@@ -374,7 +380,7 @@ Put real numbers in your README. This is what makes it senior-level.
 - [ ] Public repo with this README refined as you build
 - [ ] 2-minute demo video: two browsers, cursors, offline edit, reconnect merge, time-travel restore
 - [ ] Conflict Visualizer shown in the video
-- [ ] 4 to 5 ADRs (CRDT choice, shape schema, restore semantics, authorization, hosting)
+- [x] 5 ADRs (CRDT choice, shape schema, restore semantics, authorization, hosting) — [`docs/adr/`](./docs/adr/README.md)
 - [ ] Threat model
 - [ ] Benchmarks page with charts
 - [ ] Case study: the hardest bug you hit and how you found it

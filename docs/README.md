@@ -12,6 +12,7 @@ Read in order the first time. After that, jump to the document you need.
 
 | # | Document | What it settles | Primary phase |
 |---|---|---|---|
+| — | [ADRs](./adr/README.md) | The five decisions that are expensive to reverse, each with its rejected alternatives | Pre-work |
 | 1 | [System Design](./01-system-design.md) | Goals, non-goals, non-functional requirements, key decisions, risks, success metrics | Pre-work |
 | 2 | [System Architecture](./02-system-architecture.md) | Runtime topology, component boundaries, data flow, sync protocol, package graph | Pre-work |
 | 3 | [Frontend](./03-frontend.md) | State ownership, canvas renderer, tools, document blocks, presence rendering, PWA/offline | 1–4 |
@@ -41,6 +42,11 @@ Anything marked **Decision** in a table is a candidate for a formal ADR in `docs
 written **when the decision is made and before the code that depends on it lands**. The
 "Key design decisions" table in the root README is the seed list; these docs flesh out the
 "why" so an ADR can be written in minutes rather than hours.
+
+The five that are expensive to reverse already have records — see [`adr/`](./adr/README.md). They
+cover D1, D2, D3, D5, D10, D11, D12, and D17, which is eight decision-table rows across five
+records. The rest of the table does not yet have one, and per the convention below each needs
+either a record or a note saying why the decision is cheap to reverse.
 
 Anything that changes a decision already marked **Decision** in these docs must be accompanied by an
 ADR that supersedes it. No silent drift.
