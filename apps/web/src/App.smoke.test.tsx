@@ -1,7 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
+import { Doc } from 'yjs'
+import { readBoard } from '@mesob/schema'
+import { ShapeStore } from '@mesob/web-geometry'
 import { useBoardStore } from './store.js'
+import { CanvasController, type Tool } from './canvas-controller.js'
 import { App } from './App.js'
 
 /**
@@ -112,6 +116,105 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+describe('CanvasController', () => {
+  /**
+   * The interaction path, driven the way a pointer drives it.
+   *
+   * This exists because every earlier test in this app left a real hole: nothing here ever
+   * called `refresh`, and `refresh` calling itself is not a type error, not a lint error and
+   * not a build error. It typechecks, it bundles, and it only detonates on the first
+   * pointer-up — the one moment a user is guaranteed to try within seconds of opening the
+   * page. A passing suite and a white screen are entirely compatible.
+   */
+  function mountController(tool: Tool = 'rect'): { controller: CanvasController; doc: Doc } {
+    const doc = new Doc()
+    const canvases = [
+      document.createElement('canvas'),
+      document.createElement('canvas'),
+      document.createElement('canvas'),
+    ]
+    const controller = new CanvasController(
+      canvases[0]!,
+      canvases[1]!,
+      canvases[2]!,
+      doc,
+      new ShapeStore(),
+      {
+        onSelectionChange: () => {
+          // The store's projection is asserted directly; the callback is not under test.
+        },
+        onShapeCountChange: () => {
+          // As above.
+        },
+      },
+    )
+    controller.resize(800, 600, 1)
+    controller.setTool(tool)
+    return { controller, doc }
+  }
+
+  it('refresh terminates instead of recursing into itself', () => {
+    const { controller } = mountController()
+    // A stack overflow surfaces as a RangeError, so simply reaching the assertion is the
+    // test. The value check afterwards is there to make the intent obvious to a reader.
+    expect(() => {
+      controller.refresh()
+    }).not.toThrow()
+  })
+
+  it('draws a rectangle into the document on a drag', () => {
+    const { controller, doc } = mountController()
+
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+
+    // One shape, and it is the one the drag described. Read back through the schema rather
+    // than the store, so this fails if the write itself is wrong and not only if the
+    // projection is. readBoard returns [id, shape] tuples and already drops tombstones.
+    //
+    // The numbers are world coordinates, not the screen points that were dragged: at
+    // zoom 1 with the camera at the origin, screen (100, 100) on an 800x600 canvas is
+    // world (-300, -200). Asserting the world values is also an assertion that the
+    // screen-to-world transform ran, which a test that dragged in world units would skip.
+    const shapes = readBoard(doc)
+    expect(shapes).toHaveLength(1)
+    const shape = shapes[0]?.[1]
+    expect(shape?.type).toBe('rect')
+    if (shape?.type !== 'rect') throw new Error('expected a rect')
+    expect(shape.x).toBe(-300)
+    expect(shape.y).toBe(-200)
+    expect(shape.w).toBe(100)
+    expect(shape.h).toBe(60)
+  })
+
+  it('reflects a drag into the store after the commit', () => {
+    const { controller } = mountController()
+
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+
+    // The commit path ends in refresh, so this covers the same recursion from the other
+    // direction: the first pointer-up after a drag to draw.
+    expect(() => controller.refresh()).not.toThrow()
+    expect(controller.store.size).toBe(1)
+  })
+
+  it('undoes a drawn rectangle without recursing', () => {
+    const { controller, doc } = mountController()
+
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+    expect(controller.store.size).toBe(1)
+
+    expect(() => controller.undoStep()).not.toThrow()
+    controller.refresh()
+    expect(readBoard(doc)).toHaveLength(0)
+  })
 })
 
 describe('App', () => {
