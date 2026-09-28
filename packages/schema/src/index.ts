@@ -10,6 +10,7 @@ export {
   createRectShape,
   deleteShape,
   hitTest,
+  isBoxedShape,
   readBoard,
   readShape,
   shapesMap,

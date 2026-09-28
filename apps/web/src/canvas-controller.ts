@@ -19,6 +19,7 @@ import { BoardRenderer, hitHandle } from '@mesob/web-geometry'
 import {
   createRectShape,
   createViewport,
+  isBoxedShape,
   screenToWorld,
   shapesMap,
   toTransform,
@@ -266,7 +267,11 @@ export class CanvasController {
       if (this.handle >= 0) {
         const i = this.primary
         const shape = this.store.shapeAt(i)
-        if (shape?.type === 'rect') {
+        // Ask whether the shape is described by its box, not whether it happens to be a
+        // rect. The two are the same question until the first type that is not a box, and
+        // until then the narrower one is correct code that would quietly refuse to resize
+        // every type added after this one.
+        if (isBoxedShape(shape)) {
           this.interaction = {
             kind: 'resize',
             handle: this.handle,

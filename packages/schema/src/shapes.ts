@@ -133,6 +133,21 @@ export interface CreateShapeParams {
 }
 
 /**
+ * Whether a shape is described entirely by the box it is stored with.
+ *
+ * This is the question every resize interaction has to ask, and the answer has to live in
+ * one place. Asking it inline as `shape.type === 'rect'` is how a box-driven feature ends
+ * up working for rects and silently doing nothing for the next type added — the branch is
+ * not a type error, it is correct code for the only member of the union at the time. A
+ * `line` will be the first shape this rejects, and rejecting it is the point: a line
+ * cannot be resized by dragging its box's corners, so a caller reaching this guard has to
+ * say so rather than getting a box that lies.
+ */
+export function isBoxedShape(shape: Shape | null | undefined): shape is BoxedShape {
+  return shape?.type === 'rect' || shape?.type === 'ellipse'
+}
+
+/**
  * Create a rect and insert it into the document.
  *
  * Writes into a pre-built `Y.Map` and then inserts it, rather than inserting an empty

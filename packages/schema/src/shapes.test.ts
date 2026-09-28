@@ -7,11 +7,12 @@ import {
   createRectShape,
   deleteShape,
   hitTest,
+  isBoxedShape,
   readBoard,
   readShape,
   shapesMap,
 } from './shapes.js'
-import type { EllipseShape, Shape } from './shapes.js'
+import type { EllipseShape, Shape, ShapeType } from './shapes.js'
 
 const doc = () => new Doc()
 
@@ -343,5 +344,41 @@ describe('ellipse', () => {
       expect(hitTest(r, { x: 1, y: 1 })).toBe(true)
       expect(hitTest(ellipse(), { x: 1, y: 1 })).toBe(false)
     })
+  })
+})
+
+describe('isBoxedShape', () => {
+  const shape = (type: ShapeType): Shape => ({
+    id: 's1',
+    type,
+    z: first(),
+    lastDeleted: false,
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1,
+    fill: '#fff',
+    stroke: '#000',
+    strokeWidth: 1,
+    rotation: 0,
+  })
+
+  it('accepts both types that are described by a box', () => {
+    expect(isBoxedShape(shape('rect'))).toBe(true)
+    expect(isBoxedShape(shape('ellipse'))).toBe(true)
+  })
+
+  it('rejects a missing shape rather than throwing', () => {
+    // A caller asking this question about a shape that is not there is asking whether it
+    // may be resized, and the answer has to be no without an exception in the way.
+    expect(isBoxedShape(null)).toBe(false)
+    expect(isBoxedShape(undefined)).toBe(false)
+  })
+
+  it('narrows the type, so a caller is not left re-testing it', () => {
+    const s: Shape = shape('ellipse')
+    if (!isBoxedShape(s)) throw new Error('expected a boxed shape')
+    // The point of the guard: `x`, `w` and `h` are reachable because the type says so.
+    expect(s.x + s.w).toBe(1)
   })
 })
