@@ -121,7 +121,10 @@ export class BoardRenderer {
 
     const n = this.store.cull(this.view.x, this.view.y, this.view.w, this.view.h, this.scratch)
     for (let k = 0; k < n; k++) {
-      this.drawShape(ctx, t, this.scratch[k])
+      const i = this.scratch[k]
+      // `cull` wrote `k` entries, so this is in range; the check keeps the compiler from
+      // widening every field read below to `number | undefined`.
+      if (i !== undefined) this.drawShape(ctx, t, i)
     }
   }
 
