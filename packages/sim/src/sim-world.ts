@@ -14,14 +14,39 @@
  */
 
 import { applyUpdate, encodeStateAsUpdate, encodeStateVector, Doc } from 'yjs'
-import { after, first, type Key } from '@mesob/schema'
-import { createRectShape, deleteShape, readBoard, shapesMap, type Shape } from '@mesob/schema'
+import {
+  after,
+  createEllipseShape,
+  createRectShape,
+  first,
+  shapesMap,
+  type BoxedShape,
+  type CreateShapeParams,
+  type Key,
+  type Shape,
+  type ShapeMap,
+} from '@mesob/schema'
+import { deleteShape, readBoard } from '@mesob/schema'
 import { makeRandom } from './rng.js'
 import { BaseTransport, type Transport } from './transport.js'
 
-/** The ops a replica can perform. Deliberately small; richer ops come with the shapes. */
+/**
+ * The ops a replica can perform. Deliberately small; richer ops come with the shapes.
+ *
+ * `add` carries the type rather than each shape type getting its own op kind. An op kind
+ * per type would multiply the cases here and in the op generator for a difference that is
+ * one argument, and the field is what the generator wants to be able to vary anyway.
+ */
 export type Op =
-  | { kind: 'add'; id: string; x: number; y: number; w: number; h: number }
+  | {
+      kind: 'add'
+      id: string
+      type: BoxedShape['type']
+      x: number
+      y: number
+      w: number
+      h: number
+    }
   | { kind: 'move'; id: string; x: number; y: number }
   | { kind: 'set'; id: string; property: 'fill' | 'stroke' | 'strokeWidth'; value: string | number }
   | { kind: 'delete'; id: string }
@@ -32,6 +57,19 @@ export interface Replica {
 }
 
 const SETTABLE_PROPERTIES = ['fill', 'stroke', 'strokeWidth'] as const
+
+/**
+ * The creator for each type the sim can add.
+ *
+ * `BoxedShape` is the constraint, not a detail: the sim's `add` op carries a box, so it
+ * can only generate types described by one. A type outside that set needs an op that
+ * describes its geometry, which is the same reason the controller's draw tools are a
+ * table of boxed creators.
+ */
+const CREATORS: Record<BoxedShape['type'], (doc: Doc, params: CreateShapeParams) => ShapeMap> = {
+  rect: createRectShape,
+  ellipse: createEllipseShape,
+}
 
 export interface SimWorldOptions {
   /** Replica count, including the one that applies ops. */
@@ -102,7 +140,7 @@ export class SimWorld {
       replica.doc.transact(() => {
         switch (op.kind) {
           case 'add':
-            createRectShape(replica.doc, {
+            CREATORS[op.type](replica.doc, {
               id: op.id,
               z: this.topZ,
               rect: { x: op.x, y: op.y, w: op.w, h: op.h },
@@ -171,6 +209,7 @@ export class SimWorld {
         op = {
           kind: 'add',
           id,
+          type: this.random() < 0.5 ? 'rect' : 'ellipse',
           x: Math.floor(this.random() * 2000),
           y: Math.floor(this.random() * 2000),
           w: 10 + Math.floor(this.random() * 200),

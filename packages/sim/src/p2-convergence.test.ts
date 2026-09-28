@@ -31,6 +31,67 @@ import { propertyParams, PROPERTY_TIMEOUT_MS } from './fc-config.js'
 
 const OP_COUNT = 40
 
+describe('ellipses converge like rects do', () => {
+  it('converges when every shape added is an ellipse', () => {
+    // Driven by explicit ops rather than the random generator, because a generator that
+    // mixed both types could pass this suite while never once producing an ellipse — the
+    // type roll would just have to land the same way every run. Typing the ops here makes
+    // the ellipse path the only one exercised.
+    const world = new SimWorld({
+      replicas: 3,
+      transport: new PermutedTransport(makeRandom(20260928)),
+      seed: 20260928,
+    })
+    const [a, b, c] = world.replicas as [Replica, Replica, Replica]
+    world.apply({ kind: 'add', id: 'e0', type: 'ellipse', x: 10, y: 10, w: 80, h: 40 }, a)
+    world.apply({ kind: 'add', id: 'e1', type: 'ellipse', x: 200, y: 20, w: 120, h: 90 }, b)
+    world.apply({ kind: 'add', id: 'e2', type: 'ellipse', x: 40, y: 300, w: 200, h: 60 }, c)
+    // Sync before mutating. A delete issued against a replica that has not yet received
+    // the shape is a no-op by design — ops are generated without global knowledge — so
+    // without this the delete would quietly do nothing and the test would still pass on
+    // convergence while asserting nothing about a delete.
+    world.syncAll()
+    // Then mutate them from all three replicas at once, which is where a type-dependent
+    // path would diverge if one existed.
+    world.apply({ kind: 'move', id: 'e0', x: 11, y: 12 }, b)
+    world.apply({ kind: 'set', id: 'e1', property: 'fill', value: '#ff0000' }, c)
+    world.apply({ kind: 'set', id: 'e2', property: 'strokeWidth', value: 4 }, a)
+    world.apply({ kind: 'delete', id: 'e1' }, a)
+
+    world.syncAll()
+    expect(converged(world)).toBe(true)
+    // Not vacuously true: the board has to actually hold ellipses, and the delete has to
+    // have been a delete of an ellipse rather than a shape that never arrived.
+    const board = world.boards()[0] ?? []
+    expect(board.map(([id]) => id).sort()).toEqual(['e0', 'e2'])
+    expect(board.map(([, s]) => s.type)).toEqual(['ellipse', 'ellipse'])
+    world.destroy()
+  })
+
+  it('produces a mix of both types from the random generator, and they converge', () => {
+    // The complement of the test above: the generator is not biased so hard toward one type
+    // that the other is only ever covered by the hand-written ops.
+    const world = new SimWorld({
+      replicas: 3,
+      transport: new DuplicatingTransport(makeRandom(7)),
+      seed: 7,
+    })
+    const ops = world.runOps(OP_COUNT)
+    const added = ops.filter((op) => op.kind === 'add')
+    const types = new Set(added.map((op) => op.type))
+    expect(types).toEqual(new Set(['rect', 'ellipse']))
+
+    world.syncAll()
+    expect(converged(world)).toBe(true)
+    // Convergence compares whole boards, so a type dropped on one replica and kept on
+    // another would show as a difference — unless the comparison ignored the discriminant.
+    const perReplica = world.boards().map((b) => b.map(([, s]) => s.type).join(','))
+    expect(perReplica[0]).toBe(perReplica[1])
+    expect(perReplica[1]).toBe(perReplica[2])
+    world.destroy()
+  })
+})
+
 describe('P2 convergence under permuted delivery', () => {
   it(
     'converges for every random delivery order',
@@ -109,8 +170,8 @@ describe('syncAll closes gaps the transport left', () => {
     // Isolate one replica, keep editing on the others, and confirm the isolation is real.
     const [a, b, c] = world.replicas as [Replica, Replica, Replica]
     world.transport.disconnect(c.id)
-    world.apply({ kind: 'add', id: 'shp_partition', x: 1, y: 1, w: 10, h: 10 }, a)
-    world.apply({ kind: 'add', id: 'shp_partition2', x: 2, y: 2, w: 10, h: 10 }, b)
+    world.apply({ kind: 'add', id: 'shp_partition', type: 'rect', x: 1, y: 1, w: 10, h: 10 }, a)
+    world.apply({ kind: 'add', id: 'shp_partition2', type: 'ellipse', x: 2, y: 2, w: 10, h: 10 }, b)
     world.transport.flush()
 
     expect(world.transport.stats.dropped).toBe(2)
