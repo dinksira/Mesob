@@ -30,3 +30,200 @@ body,
   height: 100%;
   margin: 0;
 }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.app {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* The stage holds the three canvases. It is the positioning context every layer resolves
+   against, so a layer can be positioned absolutely without knowing the toolbar's width. */
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.board {
+  position: absolute;
+  inset: 0;
+}
+
+/* Three layers, one job each. The board repaints when the document or camera changes;
+   the other two repaint on pointer movement, which is far more often. */
+.layer {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+/* The presence and overlay layers sit above the board, which is where they get their
+   pointer events for free — and where they would silently swallow every one if they were
+   allowed to. The overlay keeps its tab stop and its role; it just does not take clicks. */
+.layer[data-layer='presence'],
+.layer[data-layer='overlay'] {
+  pointer-events: none;
+}
+
+/* Focus must always be visible (C6), and a canvas is the one element where the UA ring is
+   easy to lose entirely. */
+.layer[data-layer='overlay']:focus-visible {
+  outline: 2px solid var(--indigo-overlay);
+  outline-offset: -2px;
+}
+
+.toolbar {
+  width: 44px;
+  flex: 0 0 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  background: var(--substrate);
+  border-right: 1px solid rgb(42 38 34 / 12%);
+}
+
+.tool {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--charcoal);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tool:hover:not(:disabled) {
+  background: rgb(91 58 82 / 8%);
+}
+
+.tool[aria-pressed='true'] {
+  color: var(--substrate);
+  background: var(--indigo-overlay);
+  border-color: var(--indigo-overlay);
+}
+
+.tool:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.tool:focus-visible {
+  outline: 2px solid var(--indigo-overlay);
+  outline-offset: 1px;
+}
+
+.toolbar-separator {
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
+  background: rgb(42 38 34 / 16%);
+}
+
+.cluster {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--charcoal);
+}
+
+.sync {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--charcoal);
+}
+
+.sync[data-state='offline'] .sync-dot {
+  background: var(--madder);
+}
+
+.sync[data-state='error'] .sync-dot {
+  background: var(--madder);
+  box-shadow: 0 0 0 2px rgb(184 70 58 / 30%);
+}
+
+.sync[data-state='unavailable'] .sync-dot {
+  background: transparent;
+  border: 1px solid var(--charcoal);
+}
+
+.status {
+  position: absolute;
+  left: 16px;
+  bottom: 12px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--charcoal);
+  opacity: 0.7;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+/* The woven pattern is a transient-state device (C2). It appears on the empty board and
+   nowhere else, because on the working surface it would compete with shape fills. */
+.empty-woven {
+  position: absolute;
+  inset: 0;
+  opacity: 0.5;
+  background-image:
+    repeating-linear-gradient(45deg, rgb(42 38 34 / 6%) 0 1px, transparent 1px 8px),
+    repeating-linear-gradient(-45deg, rgb(42 38 34 / 6%) 0 1px, transparent 1px 8px);
+}
+
+.empty-note {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  max-width: 40ch;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.6;
+  opacity: 0.35;
+}
+
+.empty-note-sep {
+  opacity: 0.6;
+}
+
+.empty-tool {
+  position: relative;
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.5;
+}
