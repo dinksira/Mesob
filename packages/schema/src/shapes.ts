@@ -298,7 +298,13 @@ export interface Point {
   y: number
 }
 
-/** Whether a board-space point is inside the shape. */
+/**
+ * Whether a board-space point is inside the shape.
+ *
+ * Note what this does *not* do: an ellipse is not its bounding box. Testing the box would
+ * make the four corners of every ellipse clickable, which is the one way to tell a user
+ * the shape they clicked is not the shape they meant.
+ */
 export function hitTest(shape: Shape, point: Point): boolean {
   const b = boundsFor(shape)
   // Normalise the sign so a shape dragged to negative width or height still hit-tests.
@@ -306,5 +312,24 @@ export function hitTest(shape: Shape, point: Point): boolean {
   const right = Math.max(b.x, b.x + b.w)
   const top = Math.min(b.y, b.y + b.h)
   const bottom = Math.max(b.y, b.y + b.h)
-  return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom
+  if (point.x < left || point.x > right || point.y < top || point.y > bottom) return false
+
+  if (shape.type === 'ellipse') {
+    const rx = (right - left) / 2
+    const ry = (bottom - top) / 2
+    const cx = left + rx
+    const cy = top + ry
+    // A degenerate ellipse is a line or a point, not an invisible region, and which one
+    // depends on which radius collapsed. Dividing by a zero radius would give NaN for a
+    // click exactly on the centre, and NaN <= 1 is false, so that would silently make a
+    // zero-width ellipse unselectable and therefore undeletable.
+    if (rx === 0 && ry === 0) return point.x === cx && point.y === cy
+    if (rx === 0) return point.x === cx
+    if (ry === 0) return point.y === cy
+    const dx = (point.x - cx) / rx
+    const dy = (point.y - cy) / ry
+    return dx * dx + dy * dy <= 1
+  }
+
+  return true
 }

@@ -264,4 +264,84 @@ describe('ellipse', () => {
     map.set('type', 'hexagon')
     expect(readShape(map)).toBeNull()
   })
+
+  describe('hit testing', () => {
+    it('accepts the centre', () => {
+      expect(hitTest(ellipse(), { x: 100, y: 50 })).toBe(true)
+    })
+
+    it('accepts the extreme points on each axis', () => {
+      expect(hitTest(ellipse(), { x: 200, y: 50 })).toBe(true)
+      expect(hitTest(ellipse(), { x: 0, y: 50 })).toBe(true)
+      expect(hitTest(ellipse(), { x: 100, y: 0 })).toBe(true)
+      expect(hitTest(ellipse(), { x: 100, y: 100 })).toBe(true)
+    })
+
+    // The whole reason an ellipse is not tested as a box. A box test would pass all four
+    // of these, which is how a user ends up dragging a shape they did not click.
+    it('rejects the corners of its own bounding box', () => {
+      expect(hitTest(ellipse(), { x: 0, y: 0 })).toBe(false)
+      expect(hitTest(ellipse(), { x: 200, y: 0 })).toBe(false)
+      expect(hitTest(ellipse(), { x: 0, y: 100 })).toBe(false)
+      expect(hitTest(ellipse(), { x: 200, y: 100 })).toBe(false)
+    })
+
+    it('rejects points just outside the axes', () => {
+      expect(hitTest(ellipse(), { x: 201, y: 50 })).toBe(false)
+      expect(hitTest(ellipse(), { x: 100, y: 101 })).toBe(false)
+      expect(hitTest(ellipse(), { x: -1, y: 50 })).toBe(false)
+    })
+
+    // On the box diagonal, the ellipse's own boundary is where the normalised coordinates
+    // reach a squared length of 1. (185, 20) is comfortably inside the 200x100 box but
+    // normalises to 0.85 and -0.6, and 0.85^2 + 0.6^2 is 1.0825 — outside.
+    it('rejects a point on the box diagonal but outside the ellipse', () => {
+      expect(hitTest(ellipse(), { x: 185, y: 20 })).toBe(false)
+      expect(hitTest(ellipse(), { x: 150, y: 25 })).toBe(true)
+    })
+
+    it('agrees with the ellipse equation rather than the box, sampled densely', () => {
+      const s = ellipse()
+      for (let px = -20; px <= 220; px += 4) {
+        for (let py = -20; py <= 120; py += 4) {
+          const dx = (px - 100) / 100
+          const dy = (py - 50) / 50
+          const expected = dx * dx + dy * dy <= 1
+          expect(hitTest(s, { x: px, y: py })).toBe(expected)
+        }
+      }
+    })
+
+    it('hit-tests a negative extent, because a drag can produce one', () => {
+      const s = ellipse({ x: 200, y: 100, w: -200, h: -100 })
+      expect(hitTest(s, { x: 100, y: 50 })).toBe(true)
+      expect(hitTest(s, { x: 200, y: 100 })).toBe(false)
+    })
+
+    it('treats a zero extent as a point, matching the rect', () => {
+      const s = ellipse({ x: 10, y: 10, w: 0, h: 0 })
+      expect(hitTest(s, { x: 10, y: 10 })).toBe(true)
+      expect(hitTest(s, { x: 11, y: 10 })).toBe(false)
+    })
+
+    it('hit-tests a zero width as a vertical line, not a point', () => {
+      // A zero-width ellipse is the limit of a thin one: a vertical segment. Treating it
+      // as a single point would make a shape the user drew by accident undeletable.
+      const s = ellipse({ x: 10, y: 10, w: 0, h: 100 })
+      expect(hitTest(s, { x: 10, y: 60 })).toBe(true)
+      expect(hitTest(s, { x: 11, y: 60 })).toBe(false)
+    })
+
+    it('hit-tests a zero height as a horizontal line', () => {
+      const s = ellipse({ x: 10, y: 10, w: 100, h: 0 })
+      expect(hitTest(s, { x: 60, y: 10 })).toBe(true)
+      expect(hitTest(s, { x: 60, y: 11 })).toBe(false)
+    })
+
+    it('reports a rect as its box, so the two types are distinguishable', () => {
+      const r: Shape = { ...ellipse(), type: 'rect' }
+      expect(hitTest(r, { x: 1, y: 1 })).toBe(true)
+      expect(hitTest(ellipse(), { x: 1, y: 1 })).toBe(false)
+    })
+  })
 })
