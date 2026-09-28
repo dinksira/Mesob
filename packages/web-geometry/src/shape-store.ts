@@ -400,6 +400,13 @@ export class ShapeStore {
    * than asking a different one; the separation earns its keep for ellipse and pen,
    * which is why the bounds are checked separately from the exact test rather than
    * folded into it.
+   *
+   * The rejection above is the stored rotated bounding box, which for an ellipse is a
+   * strict superset of the curve — the box of a 4:1 ellipse is 28% larger in area than the
+   * curve it contains. That is the correct direction for a cull: it may keep a shape it
+   * could have dropped, and it must never drop one it should keep. Tightening it would
+   * mean storing a second set of floats per shape, for a bound that only matters for
+   * ellipses and only as an optimisation.
    */
   hitTest(worldX: number, worldY: number): number {
     for (let i = this.count - 1; i >= 0; i--) {
@@ -411,19 +418,19 @@ export class ShapeStore {
       ) {
         continue
       }
-      if (
-        containsPoint(
-          this.f(i, Field.X),
-          this.f(i, Field.Y),
-          this.f(i, Field.W),
-          this.f(i, Field.H),
-          worldX,
-          worldY,
-          this.f(i, Field.Rotation),
-        )
-      ) {
-        return i
-      }
+      const x = this.f(i, Field.X)
+      const y = this.f(i, Field.Y)
+      const w = this.f(i, Field.W)
+      const h = this.f(i, Field.H)
+      const rotation = this.f(i, Field.Rotation)
+      // The store keeps the parsed shapes alongside the floats rather than a parallel
+      // type array, so the discriminant is one indexed read rather than a second
+      // structure that could disagree with the first.
+      const inside =
+        this.shapeAt(i)?.type === 'ellipse'
+          ? containsEllipsePoint(x, y, w, h, worldX, worldY, rotation)
+          : containsPoint(x, y, w, h, worldX, worldY, rotation)
+      if (inside) return i
     }
     return -1
   }
@@ -454,11 +461,45 @@ export class ShapeStore {
 }
 
 /**
- * Point in a rotated rectangle, tested in that rectangle's own space.
+ * A point in a shape's own frame: origin at the top-left of its unrotated box, axes along
+ * its own edges.
  *
- * Rotating the point by the negated angle about the shape's centre avoids allocating a
- * matrix or a point object, which is the reason the shape is twelve floats and not
- * something with a `getTransform()` on it.
+ * Returns a shared object rather than a fresh one. The alternative is an allocation per
+ * candidate shape inside the hit-test loop, and the store holds twelve floats per shape
+ * precisely to avoid that. Safe because the caller reads it before the next call and
+ * nothing re-enters in between; it is module-private so no caller can hold it across a
+ * second call.
+ */
+const localFrame = { x: 0, y: 0 }
+
+function toLocalFrame(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  px: number,
+  py: number,
+  rotationDegrees: number,
+): { x: number; y: number } {
+  const halfW = Math.abs(w) / 2
+  const halfH = Math.abs(h) / 2
+  const cx = x + Math.min(0, w) + halfW
+  const cy = y + Math.min(0, h) + halfH
+  const radians = (rotationDegrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const dx = px - cx
+  const dy = py - cy
+  // Rotating the point by the negated angle about the shape's centre avoids allocating a
+  // matrix, which is the reason the shape is twelve floats and not something with a
+  // `getTransform()` on it.
+  localFrame.x = dx * cos + dy * sin + halfW
+  localFrame.y = -dx * sin + dy * cos + halfH
+  return localFrame
+}
+
+/**
+ * Point in a rotated rectangle, tested in that rectangle's own space.
  */
 export function containsPoint(
   x: number,
@@ -479,15 +520,51 @@ export function containsPoint(
     return px >= minX && px <= maxX && py >= minY && py <= maxY
   }
 
-  const radians = (rotationDegrees * Math.PI) / 180
-  const cos = Math.cos(radians)
-  const sin = Math.sin(radians)
-  const cx = minX + Math.abs(w) / 2
-  const cy = minY + Math.abs(h) / 2
-  // World point into the box's own frame, measured from its own corner.
-  const lx = (px - cx) * cos + (py - cy) * sin + Math.abs(w) / 2
-  const ly = -(px - cx) * sin + (py - cy) * cos + Math.abs(h) / 2
-  return lx >= 0 && lx <= Math.abs(w) && ly >= 0 && ly <= Math.abs(h)
+  const l = toLocalFrame(x, y, w, h, px, py, rotationDegrees)
+  return l.x >= 0 && l.x <= Math.abs(w) && l.y >= 0 && l.y <= Math.abs(h)
+}
+
+/**
+ * Point in a rotated ellipse, tested as an ellipse and not as its box.
+ *
+ * The box test is right for a rect and wrong for this, in the way a user notices: it
+ * makes the four corners of every ellipse clickable, so a shape gets dragged that was
+ * never clicked. Normalising by the semi-axes and comparing a squared length against 1 is
+ * the curve's own definition, so the answer is a property of the shape rather than of its
+ * container.
+ */
+export function containsEllipsePoint(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  px: number,
+  py: number,
+  rotationDegrees: number,
+): boolean {
+  const halfW = Math.abs(w) / 2
+  const halfH = Math.abs(h) / 2
+
+  // A zero radius collapses the ellipse to a line or a point, which is exactly the
+  // degenerate rect `containsPoint` already tests correctly. Handing it back is both
+  // correct and cheaper than re-deriving, and it keeps a shape the user drew by accident
+  // selectable, and so deletable, instead of dividing by zero — which would give NaN, and
+  // NaN <= 1 is false, silently missing a click that landed exactly on it.
+  if (halfW === 0 || halfH === 0) return containsPoint(x, y, w, h, px, py, rotationDegrees)
+
+  const cx = x + Math.min(0, w) + halfW
+  const cy = y + Math.min(0, h) + halfH
+
+  if (rotationDegrees === 0) {
+    const dx = (px - cx) / halfW
+    const dy = (py - cy) / halfH
+    return dx * dx + dy * dy <= 1
+  }
+
+  const l = toLocalFrame(x, y, w, h, px, py, rotationDegrees)
+  const nx = (l.x - halfW) / halfW
+  const ny = (l.y - halfH) / halfH
+  return nx * nx + ny * ny <= 1
 }
 
 /**

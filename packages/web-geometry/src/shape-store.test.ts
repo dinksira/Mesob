@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Doc } from 'yjs'
-import { createRectShape, deleteShape, shapesMap } from '@mesob/schema'
+import { createEllipseShape, createRectShape, deleteShape, shapesMap } from '@mesob/schema'
 import { Field, STRIDE, ShapeStore, colorAt, containsPoint, internColor } from './shape-store.js'
 
 const filled = (id: string, rect: { x: number; y: number; w: number; h: number }) => ({
@@ -307,6 +307,109 @@ describe('hit testing', () => {
     const out: number[] = []
     expect(store.hitTestRect(1000, 1000, 10, 10, out)).toBe(0)
     expect(out).toEqual([])
+  })
+})
+
+describe('ellipse hit testing in the store', () => {
+  const storeWith = (
+    rect: { x: number; y: number; w: number; h: number },
+    rotation = 0,
+  ): ShapeStore => {
+    const doc = new Doc()
+    createEllipseShape(doc, { id: 'e', rect, style: { rotation } })
+    const store = new ShapeStore()
+    store.refill(doc)
+    return store
+  }
+
+  const box = { x: 0, y: 0, w: 200, h: 100 }
+
+  it('hits the centre and the extremes of each axis', () => {
+    const store = storeWith(box)
+    expect(store.hitTest(100, 50)).toBe(0)
+    expect(store.hitTest(200, 50)).toBe(0)
+    expect(store.hitTest(0, 50)).toBe(0)
+    expect(store.hitTest(100, 0)).toBe(0)
+    expect(store.hitTest(100, 100)).toBe(0)
+  })
+
+  // This is the behaviour the type exists to produce. A store that dispatched on the box
+  // would pass every other assertion in this file and still be wrong here.
+  it('misses the corners of its own bounding box', () => {
+    const store = storeWith(box)
+    for (const [x, y] of [
+      [0, 0],
+      [200, 0],
+      [0, 100],
+      [200, 100],
+    ] as const) {
+      expect(store.hitTest(x, y)).toBe(-1)
+    }
+  })
+
+  it('reports -1 outside the shape entirely', () => {
+    const store = storeWith(box)
+    expect(store.hitTest(-1, 50)).toBe(-1)
+    expect(store.hitTest(201, 50)).toBe(-1)
+    expect(store.hitTest(100, 101)).toBe(-1)
+  })
+
+  it('follows the curve, sampled densely, against the ellipse equation', () => {
+    const store = storeWith(box)
+    for (let px = -20; px <= 220; px += 5) {
+      for (let py = -20; py <= 120; py += 5) {
+        const dx = (px - 100) / 100
+        const dy = (py - 50) / 50
+        expect(store.hitTest(px, py)).toBe(dx * dx + dy * dy <= 1 ? 0 : -1)
+      }
+    }
+  })
+
+  it('rotates the test with the shape, like a rect does', () => {
+    // A wide flat ellipse turned 90 degrees becomes a tall one, so what counts as inside
+    // changes with the rotation.
+    const store = storeWith(box, 90)
+    // (100, 100) is on the unrotated ellipse's long axis and inside the rotated one.
+    expect(store.hitTest(100, 100)).toBe(0)
+    // (60, 140) is inside the rotated bounding box but not inside the curve: it
+    // normalises to 0.9 and 0.8, a squared length of 1.45. Picked to be inside the cull
+    // on purpose, so this asserts the ellipse test rather than the cheap rejection.
+    expect(store.hitTest(60, 140)).toBe(-1)
+  })
+
+  it('keeps the shape selectable when one extent is zero', () => {
+    // The failure this guards against is silent and unrecoverable: a shape that cannot be
+    // hit cannot be selected, and a shape that cannot be selected cannot be deleted.
+    const flat = storeWith({ x: 10, y: 10, w: 0, h: 100 })
+    expect(flat.hitTest(10, 60)).toBe(0)
+    expect(flat.hitTest(11, 60)).toBe(-1)
+
+    const wide = storeWith({ x: 10, y: 10, w: 100, h: 0 })
+    expect(wide.hitTest(60, 10)).toBe(0)
+    expect(wide.hitTest(60, 11)).toBe(-1)
+
+    const dot = storeWith({ x: 10, y: 10, w: 0, h: 0 })
+    expect(dot.hitTest(10, 10)).toBe(0)
+    expect(dot.hitTest(10, 11)).toBe(-1)
+  })
+
+  it('hit-tests a negative extent, which a leftward drag produces', () => {
+    const store = storeWith({ x: 200, y: 100, w: -200, h: -100 })
+    expect(store.hitTest(100, 50)).toBe(0)
+    expect(store.hitTest(200, 100)).toBe(-1)
+  })
+
+  it('lets an ellipse win over a rect beneath it and lose to one above it', () => {
+    // The z-order walk is shared with rects; this checks the dispatch did not disturb it.
+    const doc = new Doc()
+    createRectShape(doc, { id: 'under', rect: { x: 0, y: 0, w: 200, h: 100 } })
+    createEllipseShape(doc, { id: 'e', rect: { x: 0, y: 0, w: 200, h: 100 } })
+    const store = new ShapeStore()
+    store.refill(doc)
+    // The centre is inside both, so the topmost wins.
+    expect(store.idAt(store.hitTest(100, 50))).toBe('e')
+    // A corner is inside the rect only, so the rect is found and the ellipse is skipped.
+    expect(store.idAt(store.hitTest(2, 2))).toBe('under')
   })
 })
 
