@@ -16,6 +16,7 @@ Read in order the first time. After that, jump to the document you need.
 | 1 | [System Design](./01-system-design.md) | Goals, non-goals, non-functional requirements, key decisions, risks, success metrics | Pre-work |
 | 2 | [System Architecture](./02-system-architecture.md) | Runtime topology, component boundaries, data flow, sync protocol, package graph | Pre-work |
 | 3 | [Frontend](./03-frontend.md) | State ownership, canvas renderer, tools, document blocks, presence rendering, PWA/offline | 1–4 |
+| P1 | [Phase 1 Design](./phase-1-design.md) | Visual language, colour tokens, chrome layout, component list, accessibility, G1 acceptance | 1 |
 | 4 | [API and Backend Logic](./04-api-and-backend.md) | REST contracts, realtime server internals, persistence loop, export pipeline | 2–6 |
 | 5 | [Database and Storage](./05-database-and-storage.md) | Postgres schema, migrations, compaction, retention, object storage, capacity math | 2, 5 |
 | 6 | [Auth and Permissions](./06-auth-and-permissions.md) | Token model, role matrix, handshake + per-message authorization, revocation | 5 |

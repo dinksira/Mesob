@@ -472,8 +472,14 @@ tests and the Conflict Visualizer.
 - [ ] Pan, zoom, marquee-select, move, resize, and rotate are correct at 0.1× and 8× zoom
 - [ ] Undo undoes only the local user's edits, and merges a word into one entry
 - [ ] Editing works with the network blackholed, survives a reload, and merges on reconnect
+      (**G2.** The G1 criterion is TTI from IndexedDB with no network in the path, since Phase 1 has
+      no server. See [phase 1 design](./phase-1-design.md#g1-acceptance))
 - [ ] 200 doc blocks on one board scroll and edit smoothly
 - [ ] Concurrent typing in one paragraph converges (Phase 4 gate)
 - [ ] Amharic input, rendering, and IME composition work on Windows and Linux
 - [ ] The shape list panel is operable by keyboard and screen reader
+      (**G2.** G1 covers full keyboard operation of the canvas instead. See
+      [phase 1 design § Accessibility](./phase-1-design.md#accessibility))
 - [ ] Time to first paint from IndexedDB < 1 s with the WS endpoint unreachable
+      (**G2.** G1 is TTI from IndexedDB with no network in the path. See
+      [phase 1 design § G1 acceptance](./phase-1-design.md#g1-acceptance))
