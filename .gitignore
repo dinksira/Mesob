@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+out/
+.vite/
+*.tsbuildinfo
+
+# Environment — .env.example IS committed
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+logs/
+
+# Test output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+playwright/.cache/
+blob-report/
+.playwright/
+
+# Local Postgres (docker compose volume)
+.pgdata/
+postgres-data/
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local agent scratch
+.claude/
+.cursor/
+artifacts/
+
+# NOTE: pnpm-lock.yaml is intentionally NOT ignored.
+# Doc 08 requires the lockfile to be committed and CI to install with
+# --frozen-lockfile, so a resolved version cannot change under us.
