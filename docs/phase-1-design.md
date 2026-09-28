@@ -211,9 +211,9 @@ when offline. C2 applies — it may use the pattern.
 
 Not blank, and not a watermark alone: a watermark does not say what to do.
 
-1. One faint starter `note`, `opacity: 0.35`, carrying the hint in Amharic and English. (`note` is
-   the primitive's name in [03 §3](./03-frontend.md#3-interaction-and-tools); "sticky" is not a shape
-   type in this project)
+1. One faint starter `note`, `opacity: 0.35`, carrying the hint in Amharic and English. (`note` is the
+   primitive's name in [03 §3](./03-frontend.md#3-interaction-and-tools), and the only text-bearing
+   shape in Phase 1)
 2. A woven watermark behind it, per C2 — this state is transient, so the pattern is correct here.
 3. **The cursor carries the active tool.** On an empty canvas, the pointer is replaced by the active
    tool's icon, and moving it previews the shape outline at the pointer before any drag begins.

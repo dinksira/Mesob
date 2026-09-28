@@ -479,7 +479,8 @@ tests and the Conflict Visualizer.
 - [ ] Amharic input, rendering, and IME composition work on Windows and Linux
 - [ ] The shape list panel is operable by keyboard and screen reader
       (**G2.** G1 covers full keyboard operation of the canvas instead. See
-      [phase 1 design § Accessibility](./phase-1-design.md#accessibility))
+      [phase 1 design § G1 acceptance](./phase-1-design.md#g1-acceptance), and
+      [§ Accessibility](./phase-1-design.md#accessibility) for why it is deferred)
 - [ ] Time to first paint from IndexedDB < 1 s with the WS endpoint unreachable
       (**G2.** G1 is TTI from IndexedDB with no network in the path. See
       [phase 1 design § G1 acceptance](./phase-1-design.md#g1-acceptance))
