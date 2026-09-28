@@ -177,6 +177,20 @@ function readRect(map: ShapeMap): RectShape {
 }
 
 /**
+ * Whether a value in the shapes collection is a shape map.
+ *
+ * A value there is whatever a peer put there, and a peer may be running a version that
+ * stores something else — or may simply be corrupt. `readShape` is documented to return
+ * null for a value that is not a shape, and it cannot keep that promise by calling
+ * `map.get` on something that has no `get`.
+ */
+function isShapeMap(value: unknown): value is ShapeMap {
+  return (
+    typeof value === 'object' && value !== null && 'get' in value && typeof value.get === 'function'
+  )
+}
+
+/**
  * Read a stored map into a validated shape, or null if it is not one.
  *
  * Returns null for a missing or unrecognised `type`, which is the honest answer: a map
@@ -185,6 +199,7 @@ function readRect(map: ShapeMap): RectShape {
  * the ones a concurrent create can legitimately be missing.
  */
 export function readShape(map: ShapeMap): Shape | null {
+  if (!isShapeMap(map)) return null
   switch (map.get('type')) {
     case 'rect':
       return readRect(map)
