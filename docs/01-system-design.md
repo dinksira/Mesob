@@ -210,7 +210,7 @@ Invariants (asserted in code and in tests):
 1. Every `shapes` and `blocks` value is a `Y.Map`, never a plain object. Plain objects are replaced
    wholesale on write and break D3.
 2. `z` is always a valid fractional index and unique within its sibling map.
-3. `imageKey` is never a raw data URL in persisted state (Q6 in [index](./README.md#open-questions)).
+3. `imageKey` is never a raw data URL in persisted state (Q6 in [index](./README.md#questions-pending-sign-off)).
 4. Unknown keys are preserved, never stripped, so a newer client is not broken by an older server.
 5. `boardVersion` gates migrations. A client that does not understand the board's version refuses
    to connect rather than corrupting it.
@@ -281,4 +281,4 @@ System design is done when:
 - [ ] Every "Decision" row has an ADR in `docs/adr/` before the dependent code lands
 - [ ] All 14 risks have a named mitigation with a location in these docs
 - [ ] Every NFR has a measurement method and a home dashboard
-- [ ] The 8 open questions in the [index](./README.md#open-questions) are answered
+- [ ] The 8 questions in the [index](./README.md#questions-pending-sign-off) are signed off, and each becomes an ADR

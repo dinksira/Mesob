@@ -49,7 +49,7 @@ case study than "here is a Node app".
 
 **Why not Supabase for Postgres:** branching and PITR on Neon are the deciding features for a
 migration-tested CI setup, and keeping auth bespoke avoids coupling the document's permission model to
-a vendor's user table (Q1 in the [index](./README.md#open-questions)). Supabase remains a
+a vendor's user table (Q1 in the [index](./README.md#questions-pending-sign-off)). Supabase remains a
 one-connection-string swap.
 
 **Why Render over Koyeb:** Render's free tier sleeps after 15 minutes of inactivity and its

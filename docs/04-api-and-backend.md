@@ -48,6 +48,8 @@ the document is a live shared state, everything else is a query.
 | `POST` | `/api/v1/boards/:id/comments` | commenter+ | 100/h | Create a comment anchored to a shape or text range |
 | `GET` | `/api/v1/health` | none | none | Liveness: process is up |
 | `GET` | `/api/v1/ready` | none | 10/min | Readiness: DB reachable, migrations applied, config valid |
+| `GET` | `/api/v1/health/deep` | none | 10/min | Diagnostics for dashboards: DB latency, pool saturation, room count, memory, compaction lag ([12 §6](./12-monitoring-and-alerts.md#6-health-and-readiness)) |
+| `POST` | `/api/v1/telemetry` | none | 60/min | Batched client metrics. The only unauthenticated write path, so it is aggressively rate-limited, size-capped and schema-validated ([12 §7](./12-monitoring-and-alerts.md#7-client-metrics)) |
 
 ### Response envelope
 
@@ -289,7 +291,7 @@ Three formats, three very different implementations, and the Markdown one is the
   `PUT`s directly to R2, so 10 MB never passes through the free-tier Node instance. This matters:
   a free instance has limited memory and limited request duration.
 - On `PUT` success, the client writes only `imageKey` into the shape. The data URL is discarded
-  ([index Q6](./README.md#open-questions)).
+  ([index Q6](./README.md#questions-pending-sign-off)).
 - Content-type is validated against an allowlist (`png`, `jpeg`, `gif`, `webp`) and the magic bytes
   are checked server-side before the key is trusted. Never trust a client-declared content type.
 - Orphans (uploaded but never referenced) are swept after 24 h by a lifecycle rule.
@@ -369,6 +371,8 @@ best-effort per instance and the note in [14](./14-scaling.md) says so.
 | `POST /versions` per board | 30 / h | Prevents snapshot-table bloat |
 | `POST /exports` per user | 20 / h | Export is CPU and storage |
 | `POST /uploads` per user | 200 / h | R2 cost |
+| **`POST /telemetry` per IP** | **60 / min** | Unauthenticated ingest, so the strictest write limit in the system. Also size-capped and schema-validated |
+| `GET /health/deep` per IP | 10 / min | Diagnostics are not a public API and must not be scrapeable |
 | All other reads | 120 / min | Abuse ceiling, generous on purpose |
 
 Responses include `Retry-After` and `X-RateLimit-Remaining`. A `429` from a share-link visitor is

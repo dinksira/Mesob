@@ -117,7 +117,7 @@ exports and `data:` for image fallbacks.
 Content-Security-Policy:
   default-src 'self';
   script-src 'self';
-  connect-src 'self' https://*.sentry.io wss://*.onrender.com wss://*.koyeb.app;
+  connect-src 'self' https://*.sentry.io wss://<WS_ORIGIN>;
   img-src 'self' data: blob: https://*.r2.dev;
   style-src 'self' 'unsafe-inline';            # only for the inline styles Tiptap writes
   font-src 'self';
@@ -128,6 +128,21 @@ Content-Security-Policy:
   object-src 'none';
   upgrade-insecure-requests
 ```
+
+`WS_ORIGIN` is **derived from `PUBLIC_ORIGIN` at build time**, not written by hand. A hardcoded
+platform host is a trap: point the same build at a custom domain and `connect-src` no longer matches
+the socket, the browser blocks the upgrade, and the board silently stops syncing with no server-side
+error to grep for. The build derives the scheme (`wss:` if the origin is `https:`, else `ws:`) and the
+host, and the platform fallbacks (`wss://*.onrender.com`, `wss://*.koyeb.app`) are appended only when
+`PUBLIC_ORIGIN` is itself a platform default. One env var, and every origin the app can reach is
+covered.
+
+There is a test for this. It asserts the derived value for a production-like origin, for a custom
+domain, and for a localhost dev origin, and it fails if a hand-edited host appears in the policy source.
+
+For the same reason, nothing else in the config hardcodes a platform hostname. `PUBLIC_ORIGIN` is the
+single input: the WebSocket origin, the OAuth callback URL, the CORS allowlist, and the share-link base
+are all derived from it. Moving to a custom domain is a config change, never a code change.
 
 Rules for keeping it strict:
 

@@ -237,7 +237,7 @@ The client reports the same kinds of numbers, because half of what matters is on
 | Metric | Reported | Notes |
 |---|---|---|
 | TTI from IndexedDB | every session | Bucketed by whether the socket connected first try, which separates cold-start cost from client cost |
-| Frame time p95 | per session, **only when over budget** | Keeps the free-tier quota healthy |
+| Frame time p95 | per session, **only when over budget** | Keeps the free-tier quota healthy. Exported as `mesob_render_frame_seconds` so [14 §3.7](./14-scaling.md#37-canvas-frame-time) names a metric that is actually defined |
 | Visible / total shape count | with the frame metric | Makes a frame-time regression diagnosable |
 | Reconnect attempt and reason | every reconnect | |
 | Merge summary | every merge | offline duration, remote ops, local ops, conflicts |

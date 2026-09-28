@@ -297,7 +297,7 @@ A block is a shape whose payload is a `Y.XmlFragment` bound to a Tiptap editor.
 - A block that is not being edited renders as plain text via `generateHTML` on a throttled timer.
   This is what makes 200 text blocks affordable.
 - Width is owned by the shape; the editor grows in height. Vertical-only resizing. Justified in
-  [index Q3](./README.md#open-questions): horizontal scaling of an editor produces unreadable text
+  [index Q3](./README.md#questions-pending-sign-off): horizontal scaling of an editor produces unreadable text
   at small widths, so block width is snapped to a minimum and height is content-driven.
 - Font stack: `Inter, "Noto Sans Ethiopic", "Nyala", system-ui, sans-serif`. The Ethiopic fallbacks
   are required or Amharic renders as tofu on Windows, which is the platform risk K11 names. Verified

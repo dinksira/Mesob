@@ -180,9 +180,9 @@ story is safe.
 | `PT5` | A client goes offline mid-typing, for 10,000 operations, then reconnects | Every operation present; merge summary accurate |
 | `PT6` | A client is offline, the other restores an old version, then the offline client reconnects | Deterministic merge; no corruption; history intact |
 | `PT7` | Three clients, staggered partitions, three-way overlap | Converged, no loss |
-| `PT8** | **The whole board goes offline**; both clients edit; server restarts in between; both reconnect | Converged, nothing lost — the "kill the server under load" test |
+| `PT8` | **The whole board goes offline**; both clients edit; server restarts in between; both reconnect | Converged, nothing lost — the "kill the server under load" test |
 | `PT9` | A client reloads mid-partition (IndexedDB replay) | State matches, no duplicate application |
-| `PT10** | **A Viewer's socket is fed an offline-then-online transition** | Every write rejected at the guard, with a metric and no doc change |
+| `PT10` | **A Viewer's socket is fed an offline-then-online transition** | Every write rejected at the guard, with a metric and no doc change |
 | `PT11` | A client reconnects with a stale IndexedDB state from days ago | Syncs forward; nothing from the present is lost |
 | `PT12` | A named version is created, then edits continue, then a restore | History intact; restore is a forward change; both old and new states loadable |
 
@@ -245,9 +245,9 @@ layer that catches the "works in theory" bugs that unit tests cannot see.
 | `E2E17` | 5,000 shapes generated via a test hook, then pan and zoom | Frame budget held |
 | `E2E18` | Keyboard-only: tab to the shape list, select, move, delete | All work; focus visible |
 | `E2E19` | Axe scan on landing, board, versions, settings | Zero serious violations |
-| `E2E20** | **The Conflict Visualizer**: partition two tabs, make conflicting edits, reconnect, replay | The animation matches the actual merge |
+| `E2E20` | **The Conflict Visualizer**: partition two tabs, make conflicting edits, reconnect, replay | The animation matches the actual merge |
 | `E2E21` | The PWA installs, the SW activates, the app works offline | Install prompt, offline navigation |
-| `E2E22 | A 200-block document scrolls and edits smoothly | Frame budget held |
+| `E2E22` | A 200-block document scrolls and edits smoothly | Frame budget held |
 
 ### Determinism
 
@@ -298,7 +298,7 @@ each case has an explicit assertion rather than "no alert fired".
 ## 8. Load testing
 
 k6, against a **local** Postgres and a local server. Running it against a sleeping free-tier instance
-would measure cold starts, not load ([index Q8](./README.md#open-questions)). Free-tier numbers are
+would measure cold starts, not load ([index Q8](./README.md#questions-pending-sign-off)). Free-tier numbers are
 reported separately, clearly labelled as including wake-up.
 
 ### Scenarios

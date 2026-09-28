@@ -28,7 +28,6 @@ there is no per-route guessing.
 | Fonts, static images in the bundle | `public, max-age=31536000, immutable` | 1 year | 1 year | Cache-first | |
 | `sw.js` | `no-cache` | revalidate | revalidate | never cached by itself | The SW must always be checked, or updates never ship |
 | `manifest.webmanifest` | `public, max-age=3600` | 1 h | 1 h | Cache-first | |
-| Sentry SDK bundle | `public, max-age=3600` | 1 h | 1 h | none | |
 | **`/api/v1/boards/:id`** | `private, max-age=0, must-revalidate` + `ETag` | **no-store** | revalidate (`304`) | **never** | Metadata changes; a shared cache must not hold it |
 | **`/api/v1/boards/:id/versions`** | `private, max-age=30` | no | 30 s | never | Short TTL; a stale version list is confusing but harmless |
 | **`/api/v1/boards/:id/versions/:vid/state`** | `private, max-age=0, must-revalidate` + `ETag` | no | revalidate | never | Historical state is immutable, so a long TTL would be safe — but a `304` is cheaper and the risk of getting it wrong is high |
@@ -39,6 +38,7 @@ there is no per-route guessing.
 | **R2 images** | `public, max-age=31536000, immutable` | 1 year | 1 year | Cache-first, capped | Immutable and content-addressed ([05 §7](./05-database-and-storage.md#7-object-storage-r2)) |
 | **R2 exports** | `private, max-age=0` + signed URL (1 h) | no | session | never | Attachments expire |
 | Sentry `envelope` endpoint | `no-store` | no | none | never | |
+| Sentry SDK bundle | *(covered by hashed chunks)* | 1 y | 1 y | Cache-first | **No separate rule.** [09 §6](./09-security.md#content-security-policy) loads Sentry from the bundled SDK rather than a CDN, so it is an ordinary hashed chunk |
 | `/metrics` | `no-store` + bind to localhost | no | none | never | Never publicly reachable |
 
 Two lines deserve emphasis because they are the ones people get wrong:

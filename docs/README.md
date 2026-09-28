@@ -94,11 +94,15 @@ assertion. Evidence lands in `docs/benchmarks.md` and the root README's metrics 
 
 ---
 
-## Open questions
+## Questions pending sign-off
 
-Tracked here so they are answered deliberately rather than accidentally during implementation.
+These were open when the docs were written. Each has a **proposed** answer below, and the body text of
+the affected documents already assumes that answer — the links there point here. A question stays on
+this list until the proposal is confirmed, at which point it becomes an ADR and the answer column
+becomes history. Anything that still says "decide this during Phase 1" is wrong, and should be fixed
+rather than deferred.
 
-| # | Question | Owner | Blocks | Answer |
+| # | Question | Owner | Blocks | Proposed answer |
 |---|---|---|---|---|
 | Q1 | Neon or Supabase for Postgres? (Neon: better branch-for-PR previews. Supabase: bundled auth + storage.) | — | 05, 07 | Neon + R2, auth stays bespoke JWT |
 | Q2 | `ws` or Hocuspocus for the realtime tier? (Hocuspocus ships auth + persistence hooks, less code, less to explain.) | — | 04 | Hand-rolled `ws`; the auth and persistence loop are the case study |

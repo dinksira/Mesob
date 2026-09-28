@@ -27,7 +27,7 @@ A guest's `userId` is `gst_<random>` generated client-side. It is **not** an acc
 privileges. Guests are named in awareness with a `guest` flag, and the UI says "Selam (guest)" so no
 one mistakes an unverified name for an identity.
 
-- GitHub OAuth is a **stretch** ([index Q7](./README.md#open-questions)). v1 is guest-only, which
+- GitHub OAuth is a **stretch** ([index Q7](./README.md#questions-pending-sign-off)). v1 is guest-only, which
   keeps the auth surface to one signed token type and one cookie.
 - No passwords, ever. There is nothing to phish, nothing to hash badly, nothing to reset.
 
