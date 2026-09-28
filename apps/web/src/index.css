@@ -1,0 +1,32 @@
+/* The four Phase 1 tokens. Light mode only, per docs/phase-1-design.md. */
+:root {
+  --substrate: #faf7f2;
+  --madder: #b8463a;
+  --charcoal: #2a2622;
+  --indigo-overlay: #5b3a52;
+
+  color-scheme: light;
+  background: var(--substrate);
+  color: var(--charcoal);
+
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}

@@ -54,10 +54,25 @@ Two supporting rules:
 - **`boardVersion` gates migrations.** A client that does not understand the board's version refuses
   to connect rather than guessing. See [05 §3](../05-database-and-storage.md#3-document-schema-versioning).
 
-The fractional indexer is hand-rolled, roughly 60 lines ([index Q5](../README.md#questions-pending-sign-off)),
-rather than pulled from a library, because a maintained library for this already exists and a
-60-line implementation with a property test is a smaller liability than a dependency that stops
-being maintained. It is a pure function of `(a, b)`, so it is directly fuzzable.
+The fractional indexer is `packages/schema/src/fractional-index.ts`, a thin wrapper over the
+`fractional-indexing` package ([index Q5](../README.md#questions-pending-sign-off)) exposing four
+functions: `first`, `after`, `before`, `between`. It was originally specified as hand-rolled, and that
+was tried first. It did not survive contact with its own tests, which is the reason for the change and
+the argument for it:
+
+- A base-62 key with no leading zero is **not** order-equivalent to its numeric value. String length
+  dominates the comparison, so `1 < 10 < 100 < 2`, and an append sequence is not lexicographic order.
+  Any scheme relying on that equivalence silently corrupts z-order.
+- Fixing it with fixed-width keys makes the space dense, so `between` of two adjacent keys has nowhere
+  to go. The general scheme needs variable-length keys with zero-padding semantics, which is where the
+  subtlety lives.
+
+Both bugs were caught by tests asserting the property the renderer actually depends on (native sort
+reproduces insertion order), not by inspection. The remaining risk was a third attempt, on the grounds
+that a hand-rolled CRDT-adjacent primitive is a bad place to be clever. `fractional-indexing` is CC0,
+has zero dependencies, is ~60 lines of algorithm, and is the maintained implementation from the authors
+of the original. Confining it to one wrapper file keeps the supply-chain surface at exactly one
+reviewed import.
 
 ## Consequences
 
@@ -116,5 +131,7 @@ needs a renumbering pass, and that pass is a distributed operation. Fractional s
 one; the cost is key length, which is bounded and tested (10,000 sequential appends staying ordered
 and short is in the [13 §4](../13-testing.md#3-property-and-fuzz-testing) property list).
 
-**A library for fractional indexing.** Rejected as a supply-chain preference, not a quality claim.
-If the hand-rolled version needs a rewrite, this is the cheapest possible rewrite.
+**A library for fractional indexing.** Adopted after two failed hand-rolled attempts, both caught by
+the ordering test. The supply-chain concern that originally argued against it turned out to be the
+smaller risk: the library is CC0 with zero dependencies, and confining it to one wrapper means there is
+exactly one import to review. See [Decision](#decision) above for the two bugs that forced this.

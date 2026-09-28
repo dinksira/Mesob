@@ -115,7 +115,7 @@ rather than deferred.
 | Q2 | `ws` or Hocuspocus for the realtime tier? (Hocuspocus ships auth + persistence hooks, less code, less to explain.) | — | 04 | Hand-rolled `ws`; the auth and persistence loop are the case study |
 | Q3 | Do renderers and doc blocks share one coordinate space, or do doc blocks live in a DOM overlay? | — | 03 | Overlay, transform-synced. One space would force ProseMirror through canvas |
 | Q4 | Can a Commenter post a CRDT update that only encodes presence/annotation? | — | 04, 06 | No. Commenter writes go to a separate `comments` table, not the doc |
-| Q5 | Fractional indexing library, or hand-rolled? | — | 03 | Hand-rolled, ~60 lines, no dependency on an unmaintained package |
+| Q5 | Fractional indexing library, or hand-rolled? | — | 03 | `fractional-indexing` (CC0, zero deps, maintained). Initially hand-rolled; the first two attempts had real ordering bugs, see [ADR-0002](./adr/0002-shape-representation-and-z-order.md) |
 | Q6 | Image storage: inline data URL (simple, big doc) or immediate upload to R2 (fast doc, needs auth)? | — | 03, 05 | Immediate upload to R2, doc stores only the blob key + a data URL while in flight |
 | Q7 | Do we ship autosave-to-`users` accounts at all, or guests-only for v1? | — | 06, 07 | Guests-only + GitHub OAuth as a stretch. Keeps the auth surface small |
 | Q8 | k6 needs a stateful target; a free-tier sleeping server distorts latency numbers | — | 13 | Run load tests against a local Postgres + local server, report free-tier numbers separately as "includes cold start" |

@@ -1,0 +1,17 @@
+# Normalise to LF in the repository and in the working tree, on every platform.
+# Without this, Windows checkouts rewrite LF to CRLF and every file shows up as
+# modified. Matches .editorconfig and .prettierrc.
+* text=auto eol=lf
+
+# Binary, never diffed or line-ending-converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+pnpm-lock.yaml -diff

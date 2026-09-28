@@ -1,0 +1,9 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# Node's own build scripts are the supply-chain surface here, so nothing runs
+# implicitly. esbuild and vite need theirs; everything else is denied.
+# Ref: docs/09-security.md (no secret in the repo), docs/08-cicd-and-version-control.md
+onlyBuiltDependencies:
+  - esbuild

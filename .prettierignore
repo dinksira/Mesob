@@ -1,0 +1,12 @@
+dist
+node_modules
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# Markdown is hand-wrapped for readability and table alignment, so Prettier's
+# reflow would be a large unreviewable diff for no benefit. Not prettier-formatted.
+docs/
+*.md

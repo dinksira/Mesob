@@ -253,10 +253,14 @@ dragged shape is drawn with an override transform, and one authoritative write l
 ### Z-order
 
 Fractional index strings (D5). `bringForward` computes a key strictly between the target and its
-successor; `sendBackward` mirrors it. Hand-rolled in `packages/schema/src/fractional-index.ts`, ~60
-lines, fully unit-tested against the boundary cases (list of one, list of two, first, last, empty,
-repeated calls). No dependency, because a fractional-indexing package is exactly the kind of
-unmaintained dependency K10 warns about.
+successor; `sendBackward` mirrors it. `packages/schema/src/fractional-index.ts` wraps the
+`fractional-indexing` package (CC0, zero dependencies, ~60 lines of algorithm) behind a four-function
+API — `first`, `after`, `before`, `between` — and is the only file in the codebase that imports it,
+so the rest of the app sees a four-function contract rather than a package name. Fully unit-tested
+against the boundary cases (list of one, list of two, first, last, empty, repeated calls), plus the
+property that matters most: native `Array.sort` with no comparator reproduces insertion order, which
+is what lets the renderer sort 5,000 keys without a comparison function. See
+[ADR-0002](./adr/0002-shape-representation-and-z-order.md) for why this was not hand-rolled.
 
 ### Keyboard
 
