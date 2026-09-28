@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Doc } from 'yjs'
 import { Board } from './Board.js'
 import { Toolbar } from './Toolbar.js'
+import { TOOL_FOR_KEY } from './Toolbar.js'
 import { EmptyState, SyncIndicator } from './Chrome.js'
 import { persistLocally } from './persistence.js'
 import { useBoardStore } from './store.js'
@@ -70,8 +71,8 @@ export function App() {
         return
       if (event.ctrlKey || event.metaKey || event.altKey) return
       const key = event.key.toLowerCase()
-      if (key === 'v') setTool('select')
-      if (key === 'r') setTool('rect')
+      const next = TOOL_FOR_KEY.get(key)
+      if (next) setTool(next)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => {

@@ -128,13 +128,19 @@ describe('CanvasController', () => {
    * pointer-up — the one moment a user is guaranteed to try within seconds of opening the
    * page. A passing suite and a white screen are entirely compatible.
    */
-  function mountController(tool: Tool = 'rect'): { controller: CanvasController; doc: Doc } {
+  function mountController(tool: Tool = 'rect'): {
+    controller: CanvasController
+    doc: Doc
+    /** The last selection the controller reported, as shape IDs. */
+    selectedIds: () => string[]
+  } {
     const doc = new Doc()
     const canvases = [
       document.createElement('canvas'),
       document.createElement('canvas'),
       document.createElement('canvas'),
     ]
+    let ids: string[] = []
     const controller = new CanvasController(
       canvases[0]!,
       canvases[1]!,
@@ -142,17 +148,21 @@ describe('CanvasController', () => {
       doc,
       new ShapeStore(),
       {
-        onSelectionChange: () => {
-          // The store's projection is asserted directly; the callback is not under test.
+        onSelectionChange: (next) => {
+          // The controller keeps its selection private, and a test that could only assert
+          // on it by reaching past the class could not see a bug where the class and the
+          // callback disagree. Reading what it actually reported is also the only way to
+          // catch a click that selected a shape without announcing it.
+          ids = next
         },
         onShapeCountChange: () => {
-          // As above.
+          // The store's size is asserted directly; this is not under test.
         },
       },
     )
     controller.resize(800, 600, 1)
     controller.setTool(tool)
-    return { controller, doc }
+    return { controller, doc, selectedIds: () => ids }
   }
 
   it('refresh terminates instead of recursing into itself', () => {
@@ -215,6 +225,148 @@ describe('CanvasController', () => {
     controller.refresh()
     expect(readBoard(doc)).toHaveLength(0)
   })
+
+  it('draws an ellipse when the ellipse tool is active', () => {
+    const { controller, doc } = mountController('ellipse')
+
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+
+    const shapes = readBoard(doc)
+    expect(shapes).toHaveLength(1)
+    const shape = shapes[0]?.[1]
+    expect(shape?.type).toBe('ellipse')
+    if (shape?.type !== 'ellipse') throw new Error('expected an ellipse')
+    // The same world box a rect drag of the same two points would produce: the ellipse is
+    // described by the drag, not by a separate creation path.
+    expect(shape.x).toBe(-300)
+    expect(shape.y).toBe(-200)
+    expect(shape.w).toBe(100)
+    expect(shape.h).toBe(60)
+  })
+
+  it('leaves the tool alone after a drag, so the next shape keeps its type', () => {
+    // A controller that reset to select on commit would make the second shape a marquee
+    // rather than an ellipse, and only a second drag would notice.
+    const { controller, doc } = mountController('ellipse')
+
+    for (const x of [100, 300]) {
+      controller.pointerDown(x, 100, 0)
+      controller.pointerMove(x + 80, 160)
+      controller.pointerUp()
+    }
+
+    expect(readBoard(doc).map(([, s]) => s.type)).toEqual(['ellipse', 'ellipse'])
+  })
+
+  it('normalises a leftward ellipse drag into a positive extent', () => {
+    // The renderer takes absolute radii and would throw on a negative one, so the sign
+    // must never survive this far. Screen (300,100) to (100,160) drags left and down, so
+    // the world box comes out with a negative width before normalisation.
+    const { controller, doc } = mountController('ellipse')
+
+    controller.pointerDown(300, 100, 0)
+    controller.pointerMove(100, 160)
+    controller.pointerUp()
+
+    const shape = readBoard(doc)[0]?.[1]
+    expect(shape?.type).toBe('ellipse')
+    if (shape?.type !== 'ellipse') throw new Error('expected an ellipse')
+    // 200 screen px across, 60 down, starting from world (-100, -200) going left.
+    expect(shape.w).toBe(200)
+    expect(shape.h).toBe(60)
+    expect(shape.x).toBe(-300)
+    expect(shape.y).toBe(-200)
+  })
+
+  it('selects a drawn ellipse by clicking its centre, not by clicking its box corner', () => {
+    // The end-to-end consequence of hit-testing the curve. A store that dispatched on the
+    // box would select nothing by the off-curve click below, and a user would read that as
+    // the shape being stuck.
+    const { controller, doc, selectedIds } = mountController('ellipse')
+    // A large ellipse, so the region inside the box but off the curve is comfortably
+    // larger than the handle grab radius and the two cannot be confused.
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(400, 400)
+    controller.pointerUp()
+
+    const shape = readBoard(doc)[0]?.[1]
+    if (shape?.type !== 'ellipse') throw new Error('expected an ellipse')
+    // At zoom 1 with the camera at the origin, screen (x, y) is world (x - 400, y - 300).
+    const cx = shape.x + shape.w / 2
+    const cy = shape.y + shape.h / 2
+
+    controller.setTool('select')
+    controller.pointerDown(cx + 400, cy + 300, 0)
+    controller.pointerUp()
+    expect(selectedIds()).toHaveLength(1)
+
+    // Well inside the box, well outside the curve, and far from all eight handles. For
+    // this box it normalises to about -0.67 and -0.9, a squared length of 1.25.
+    controller.pointerDown(-250 + 400, -180 + 300, 0)
+    controller.pointerUp()
+    expect(selectedIds()).toEqual([])
+  })
+
+  it('moves a drawn ellipse and keeps it an ellipse', () => {
+    const { controller, doc } = mountController('ellipse')
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+
+    const before = readBoard(doc)[0]?.[1]
+    if (before?.type !== 'ellipse') throw new Error('expected an ellipse')
+
+    controller.setTool('select')
+    const screenX = before.x + before.w / 2 + 400
+    const screenY = before.y + before.h / 2 + 300
+    controller.pointerDown(screenX, screenY, 0)
+    controller.pointerMove(screenX + 60, screenY)
+    controller.pointerUp()
+
+    const after = readBoard(doc)[0]?.[1]
+    expect(after?.type).toBe('ellipse')
+    if (after?.type !== 'ellipse') throw new Error('expected an ellipse')
+    expect(after.x).toBe(before.x + 60)
+    expect(after.y).toBe(before.y)
+    expect(after.w).toBe(before.w)
+  })
+
+  it('resizes a drawn ellipse through a handle and keeps it an ellipse', () => {
+    const { controller, doc } = mountController('ellipse')
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+
+    const before = readBoard(doc)[0]?.[1]
+    if (before?.type !== 'ellipse') throw new Error('expected an ellipse')
+    const screenX = before.x + before.w / 2 + 400
+    const screenY = before.y + before.h / 2 + 300
+
+    // The east handle sits on the right edge of the box, at its vertical centre.
+    controller.setTool('select')
+    controller.pointerDown(screenX + before.w / 2, screenY, 0)
+    controller.pointerMove(screenX + before.w / 2 + 40, screenY)
+    controller.pointerUp()
+
+    const after = readBoard(doc)[0]?.[1]
+    expect(after?.type).toBe('ellipse')
+    if (after?.type !== 'ellipse') throw new Error('expected an ellipse')
+    expect(after.w).toBe(before.w + 40)
+  })
+
+  it('undoes a drawn ellipse', () => {
+    const { controller, doc } = mountController('ellipse')
+    controller.pointerDown(100, 100, 0)
+    controller.pointerMove(200, 160)
+    controller.pointerUp()
+    expect(controller.store.size).toBe(1)
+
+    controller.undoStep()
+    controller.refresh()
+    expect(readBoard(doc)).toHaveLength(0)
+  })
 })
 
 describe('App', () => {
@@ -242,18 +394,27 @@ describe('App', () => {
     expect(container.querySelector('.empty')).not.toBeNull()
   })
 
-  it('renders the toolbar with the rectangle tool pressed and the rest disabled', () => {
+  it('renders the toolbar with the rectangle tool pressed and only built tools enabled', () => {
     const { container } = render(<App />)
 
     const pressed = [...container.querySelectorAll('button[aria-pressed="true"]')]
     expect(pressed).toHaveLength(1)
     expect(pressed[0]?.getAttribute('title')).toContain('Rectangle')
 
-    // Tools Phase 1 has not built must be genuinely disabled, not just inert.
-    const disabled = [...container.querySelectorAll('button.tool:disabled')]
-    const labels = disabled.map((b) => b.getAttribute('title') ?? '')
-    expect(labels.some((t) => t.startsWith('Ellipse'))).toBe(true)
-    expect(labels.some((t) => t.startsWith('Pen'))).toBe(true)
+    // Tools Phase 1 has not built must be genuinely disabled, not just inert. Ellipse is
+    // built, so it belongs on the enabled side now.
+    const disabled = [...container.querySelectorAll('button.tool:disabled')].map(
+      (b) => b.getAttribute('title') ?? '',
+    )
+    expect(disabled.some((t) => t.startsWith('Pen'))).toBe(true)
+    expect(disabled.some((t) => t.startsWith('Line'))).toBe(true)
+    expect(disabled.some((t) => t.startsWith('Note'))).toBe(true)
+    expect(disabled.some((t) => t.startsWith('Ellipse'))).toBe(false)
+
+    const enabled = [...container.querySelectorAll('button.tool:not(:disabled)')].map(
+      (b) => b.getAttribute('title') ?? '',
+    )
+    expect(enabled.some((t) => t.startsWith('Ellipse'))).toBe(true)
   })
 
   it('gives the overlay canvas a focus stop and a role', () => {

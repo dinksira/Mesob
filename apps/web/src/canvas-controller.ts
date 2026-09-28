@@ -17,6 +17,7 @@
 import type { ShapeStore } from '@mesob/web-geometry'
 import { BoardRenderer, hitHandle } from '@mesob/web-geometry'
 import {
+  createEllipseShape,
   createRectShape,
   createViewport,
   isBoxedShape,
@@ -25,6 +26,7 @@ import {
   toTransform,
   zoomAt,
   clampDevicePixelRatio,
+  type CreateShapeParams,
   type ShapeMap,
   type Viewport,
   type ViewportTransform,
@@ -33,6 +35,24 @@ import type { Doc } from 'yjs'
 import { UndoManager } from 'yjs'
 
 export type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'pen' | 'note'
+
+/**
+ * The creator for each tool that draws a shape, and absent for the tools that do not.
+ *
+ * A keyed table rather than an `if` in each of the two places that need to know. Those
+ * two are pointer-down, which decides whether a drag is a draw, and pointer-up, which
+ * creates the shape; if they disagreed, a drag would either do nothing or create a shape
+ * nobody asked for, and only one of the two would be covered by a test. A tool with no
+ * entry here is a tool that cannot draw, which is what makes the next drawable type one
+ * line rather than an edit in two branches.
+ *
+ * Only types described by a box can appear. `line` and `pen` are not, and adding them
+ * means giving them an entry that does not fit this signature.
+ */
+const DRAWERS: Partial<Record<Tool, (doc: Doc, params: CreateShapeParams) => ShapeMap>> = {
+  rect: createRectShape,
+  ellipse: createEllipseShape,
+}
 
 export type Interaction =
   | { kind: 'idle' }
@@ -254,7 +274,7 @@ export class CanvasController {
       return
     }
 
-    if (this.activeTool === 'rect') {
+    if (DRAWERS[this.activeTool]) {
       this.interaction = { kind: 'draw', originX: wx, originY: wy, x: wx, y: wy, w: 0, h: 0 }
       this.select([])
       return
@@ -357,17 +377,23 @@ export class CanvasController {
 
     switch (interaction.kind) {
       case 'draw': {
-        // A click rather than a drag makes no shape. Committing a zero-size rect would
+        // A click rather than a drag makes no shape. Committing a zero-size shape would
         // put something on the board the user cannot see, select or delete.
         if (Math.abs(interaction.w) > 1 || Math.abs(interaction.h) > 1) {
           const rect = normalize(interaction.x, interaction.y, interaction.w, interaction.h)
           const id = nextId()
-          this.doc.transact(() => {
-            createRectShape(this.doc, { id, rect })
-          }, LOCAL_ORIGIN)
-          this.refresh()
-          const i = this.store.indexOf(id)
-          if (i >= 0) this.select([i])
+          // The tool is read again here rather than captured when the drag began, so the
+          // shape made is the one the tool says now. A tool switched mid-drag is not
+          // possible through the toolbar, and guessing the other way would be wrong.
+          const draw = DRAWERS[this.activeTool]
+          if (draw) {
+            this.doc.transact(() => {
+              draw(this.doc, { id, rect })
+            }, LOCAL_ORIGIN)
+            this.refresh()
+            const i = this.store.indexOf(id)
+            if (i >= 0) this.select([i])
+          }
         }
         break
       }

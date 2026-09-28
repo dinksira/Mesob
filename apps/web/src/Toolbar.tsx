@@ -3,7 +3,7 @@ import type { Tool } from './canvas-controller.js'
 const TOOLS: { id: Tool; label: string; glyph: string; available: boolean }[] = [
   { id: 'select', label: 'Select', glyph: '⭢', available: true },
   { id: 'rect', label: 'Rectangle', glyph: '▭', available: true },
-  { id: 'ellipse', label: 'Ellipse', glyph: '◯', available: false },
+  { id: 'ellipse', label: 'Ellipse', glyph: '◯', available: true },
   { id: 'line', label: 'Line', glyph: '╱', available: false },
   { id: 'pen', label: 'Pen', glyph: '✎', available: false },
   { id: 'note', label: 'Note', glyph: '❝', available: false },
@@ -17,6 +17,18 @@ const SHORTCUTS: Record<Tool, string> = {
   pen: 'P',
   note: 'N',
 }
+
+/**
+ * The same table keyed the other way, for the keyboard handler.
+ *
+ * Derived rather than written out again because the two facts have to agree: the key
+ * printed on a tool's button and the key that selects it are the same shortcut, and two
+ * literals would eventually differ with nothing to notice. Only the available tools are
+ * included, so a shortcut cannot select a tool whose button is disabled.
+ */
+export const TOOL_FOR_KEY: ReadonlyMap<string, Tool> = new Map(
+  TOOLS.filter((t) => t.available).map((t) => [SHORTCUTS[t.id].toLowerCase(), t.id]),
+)
 
 export interface ToolbarProps {
   tool: Tool
