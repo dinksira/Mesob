@@ -56,7 +56,7 @@ flowchart TB
 | Suite | Runs | Budget | What it protects |
 |---|---|---|---|
 | Unit | Every push | 2 min | Geometry, indices, schemas, tokens, error mapping |
-| Property / fuzz | Every push (200) + nightly (10,000) | 3 min / 25 min | **Convergence** |
+| Property / fuzz | Every push (50 per property) + nightly (10,000) | 3 min / 25 min | **Convergence** |
 | Integration | Every push | 5 min | Real Postgres: persistence, compaction, reload, roles |
 | Partition | Every push | 3 min | **No lost edits** across offline periods |
 | E2E | Every push (Chromium), nightly (all three) | 8 min | The product, in a browser, with two users |
@@ -119,8 +119,8 @@ deleted block.
 
 | # | Property | Assertion | Runs |
 |---|---|---|---|
-| **P1** | **Convergence** | After all ops are delivered, every replica's `Y.encodeStateAsUpdate` is byte-identical | 10,000 |
-| **P2** | **Convergence under permutation** | The same op set in 50 random delivery orders yields one identical state | 1,000 |
+| **P1** | **Convergence** | After all ops are delivered in order, every replica's `Y.encodeStateAsUpdate` is byte-identical | 10,000 |
+| **P2** | **Convergence under permutation** | The same op set delivered in 50 random orders yields one identical state, asserted as equal state vectors **and** an equal canonical board read | 1,000 |
 | **P3** | **Idempotence** | Delivering every update twice or ten times changes nothing | 1,000 |
 | **P4** | **No loss** | Every acknowledged op is reflected in every replica's state (checked via the shape/block set and a text-content hash) | 10,000 |
 | **P5** | **Undo isolation** | After a client undoes its own ops, the replica matches a reference that never performed them. **A teammate's edits are untouched** | 2,000 |
@@ -134,6 +134,39 @@ deleted block.
 P11 is worth a note: it is not a *good* property, it is an *observed* one, and asserting it is how
 the doc-growth cost becomes a documented fact instead of a surprise. The same test also records the
 growth curve, which becomes the published chart.
+
+**P2 deliberately does not assert byte-identity, and this is not a weakening.** The first version of this
+section justified that with a measurement: over 300 permuted runs, byte-identity of `Y.encodeStateAsUpdate`
+held in 251 and the bytes differed in 36 runs where every shape and property agreed. **That measurement was
+wrong, and it was wrong because of a bug in the harness rather than in Yjs.** The transport fanned every
+message out to every client's handler instead of to its recipient, so a replica processed — and, via the
+"ignore messages from myself" check, skipped — a different interleaving, and replicas went looking for each
+other's clients in different orders. With delivery actually addressed, byte-identity held in 60 of 60
+permuted runs, at every batch size tried. The 251/300 figure is withdrawn.
+
+Byte-identity remains the wrong oracle anyway, for reasons that do not depend on the number:
+
+- It is a property of Yjs's struct encoder, not a convergence contract. A Yjs upgrade could reorder the
+  encoding while convergence is entirely unaffected, and this test would fail for a non-bug.
+- It cannot express the property actually worth protecting, which is that two replicas agree on *what is on
+  the board*. That is what the canonical read says.
+
+So the oracle is the two things that mean "converged": equal state vectors, and equal content under the
+canonical read from `@mesob/schema`. The canonical read is derived from the same `readShape` the renderer
+uses, deliberately, so that adding a shape type extends the oracle automatically instead of requiring a
+second list of property names to be maintained in the test.
+
+P1 keeps byte-identity because there the delivery order is in-order and shared, which makes byte-identity
+well-defined and worth asserting. The asymmetry is the point: P1 and P2 answer different questions and
+should not share an oracle.
+
+One more thing every convergence test must assert about itself: that the transport under test actually
+perturbs. A `PermutedTransport` that silently degrades to in-order delivery turns P2 back into P1 while
+still reporting green, which is the tautology this property exists to avoid. So the transports carry
+counters and the tests assert on them. The same rule caught the routing bug above: a partition test passed
+while the partitioned replica was receiving everything, because the "isolated" replica's board was being
+compared against a transport that never isolated it. Delivery is addressed per recipient, and a regression
+test now asserts that a client receives only its own traffic.
 
 ### The harness
 
@@ -163,6 +196,34 @@ The `SimWorld` is a faithful in-process implementation of the client: real `Y.Do
 `Y.UndoManager`, the real schema factories, and a transport that can drop, duplicate, reorder,
 partition, and delay. **It does not reimplement CRDT semantics** — it uses Yjs — so a passing
 property is a statement about the actual document layer, not about a model of it.
+
+**As built in `packages/sim`, so the numbers above are checkable rather than aspirational.** Three real
+`Y.Doc` replicas by default; a transport that can drop, duplicate, reorder, and partition; and a separate
+`syncAll()` state-vector path for joining and healing, so the transport never has to know about either. Ops
+are delivered in batches, because a one-message buffer cannot be reordered — flushing after every op would
+make `PermutedTransport` report zero reordering and quietly turn P2 back into P1.
+
+| Knob | Default | Purpose |
+|---|---|---|
+| `FAST_CHECK_RUNS` | `50` per property | Raise for the nightly; 10,000 seeds is where the rare orderings surface |
+| `FAST_CHECK_SEED` | unset | Pins the seed, so a nightly failure replays exactly |
+| Per-test timeout | 60 s | Vitest's 5 s default is sized for a unit test; a property test crosses it on a busy machine |
+
+The `packages/sim` suite runs in about 7 s at the defaults, against a 10 s budget. `budget.test.ts` asserts
+the run count and timeout relationship so neither can drift without a red build. Delivery is addressed per
+recipient, and the transports count what they did — `sent`, `delivered`, `dropped`, `duplicated`, `inOrder`,
+`outOfOrder`, `disconnected` — because the tests assert on those counters, which is what turns "the
+perturbation did nothing" from a silent pass into a failure.
+
+One Yjs instance is enforced, not assumed. The override lives in `pnpm-workspace.yaml` — pnpm 12 no longer
+reads `pnpm.overrides` from `package.json`, and it only says so in a warning that is easy to miss in a long
+install log, so an override that is silently ignored looks exactly like one that is working.
+`single-instance.test.ts` then compares the `Doc` constructor reached through the schema barrel against the one
+reached through `yjs` directly, and carries an update across the two. Two copies of Yjs would keep separate
+registries of which client IDs they have seen, so an update from one looks like an update from an unknown
+client to the other and is dropped **without an error** — silent, intermittent, and close to undiagnosable
+from a stack trace. The test covers the failure mode; the `overrides` block in `pnpm-lock.yaml` is the record
+that the override is in force.
 
 ---
 

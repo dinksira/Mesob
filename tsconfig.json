@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/schema" },
     { "path": "./packages/shared" },
+    { "path": "./packages/sim" },
     { "path": "./apps/web" }
   ]
 }

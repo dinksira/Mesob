@@ -7,3 +7,18 @@ packages:
 # Ref: docs/09-security.md (no secret in the repo), docs/08-cicd-and-version-control.md
 onlyBuiltDependencies:
   - esbuild
+
+# One Yjs across the workspace, enforced here rather than in package.json.
+#
+# pnpm 12 no longer reads `pnpm.overrides` from package.json, and it says so with a
+# warning that is easy to miss in a long install log. An override that is silently
+# ignored is worse than no override, because it looks like the guarantee is in place.
+#
+# The reason it matters: the schema hands out Yjs types and packages/sim constructs
+# Y.Docs, and two copies of Yjs keep two private registries of which client IDs they
+# have seen. An update from one copy looks like an update from an unknown client to the
+# other and is dropped without an error. packages/sim/src/single-instance.test.ts checks
+# that failure mode at runtime; the `overrides` block recorded in pnpm-lock.yaml is what
+# shows the override is in force.
+overrides:
+  yjs: ^13.6.33

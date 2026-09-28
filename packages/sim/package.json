@@ -1,5 +1,5 @@
 {
-  "name": "@mesob/schema",
+  "name": "@mesob/sim",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,10 +11,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "fractional-indexing": "^4.0.0",
+    "@mesob/schema": "workspace:*",
     "yjs": "^13.6.0"
   },
   "devDependencies": {
+    "fast-check": "^4.0.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.0"
   }
