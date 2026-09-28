@@ -464,7 +464,7 @@ export class CanvasController {
    */
   refresh(): void {
     const ids = this.selectedIds
-    this.refresh()
+    this.store.refill(this.doc)
     const remapped: number[] = []
     for (const id of ids) {
       const i = this.store.indexOf(id)
