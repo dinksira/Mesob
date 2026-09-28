@@ -3,56 +3,62 @@ import { Doc } from 'yjs'
 import { Board } from './Board.js'
 import { Toolbar } from './Toolbar.js'
 import { EmptyState, SyncIndicator } from './Chrome.js'
-import type { CanvasController, Tool } from './canvas-controller.js'
+import { persistLocally } from './persistence.js'
+import { useBoardStore } from './store.js'
+import type { CanvasController } from './canvas-controller.js'
 
-const TOOL_LABELS: Record<Tool, string> = {
+const TOOL_LABELS = {
   select: 'Select',
   rect: 'Rectangle',
   ellipse: 'Ellipse',
   line: 'Line',
   pen: 'Pen',
   note: 'Note',
-}
+} as const
 
 /**
  * The application shell.
  *
- * Holds the document, the tool, and the little state the chrome needs to render. The
- * design calls for Zustand to own local state; that is not installed and the registry is
- * unreachable from this environment, so this is `useState` for now. It is a deliberate
- * stand-in, not a decision that React state is the right home for it: the tool and
- * selection are UI state and never touch the document, which is the property the store
- * has to preserve whichever library ends up holding them.
+ * Owns the document and nothing else. The document is the single shared state, so it is
+ * created once and passed down; everything else is local state in the Zustand store, read
+ * by the chrome through a selector. That is the split the design calls for, and it is
+ * what keeps a 60fps camera from re-rendering a tree that does not draw it.
  */
 export function App() {
   const [doc] = useState(() => new Doc())
-  const [tool, setTool] = useState<Tool>('rect')
-  const [shapeCount, setShapeCount] = useState(0)
-  const [canUndo, setCanUndo] = useState(false)
-  const [canRedo, setCanRedo] = useState(false)
-  const [zoom, setZoom] = useState(1)
-  const [selection, setSelection] = useState<string[]>([])
+  const tool = useBoardStore((s) => s.tool)
+  const setTool = useBoardStore((s) => s.setTool)
+  const shapeCount = useBoardStore((s) => s.shapeCount)
+  const selection = useBoardStore((s) => s.selection)
+  const zoom = useBoardStore((s) => s.zoom)
+  const sync = useBoardStore((s) => s.sync)
+  const canUndo = useBoardStore((s) => s.canUndo)
+  const canRedo = useBoardStore((s) => s.canRedo)
   const controllerRef = useRef<CanvasController | null>(null)
 
-  // Nothing persists yet. y-indexeddb is not installed, so the honest state is
-  // 'unavailable' rather than a green dot that lies: a dot saying 'saved to this device'
-  // when the device has no copy is worse than no dot.
-  const syncState = 'unavailable' as const
+  // Persistence starts with the document and is torn down with the app. IndexedDB keeps
+  // the copy; the sync indicator says whether it actually managed to.
+  useEffect(() => {
+    const persistence = persistLocally(doc)
+    return () => {
+      void persistence.destroy()
+    }
+  }, [doc])
 
   const onUndo = useCallback(() => {
     const controller = controllerRef.current
     if (!controller) return
     controller.undoStep()
-    setCanUndo(controller.canUndo)
-    setCanRedo(controller.canRedo)
+    const state = useBoardStore.getState()
+    state.setHistory(controller.canUndo, controller.canRedo)
   }, [])
 
   const onRedo = useCallback(() => {
     const controller = controllerRef.current
     if (!controller) return
     controller.redoStep()
-    setCanUndo(controller.canUndo)
-    setCanRedo(controller.canRedo)
+    const state = useBoardStore.getState()
+    state.setHistory(controller.canUndo, controller.canRedo)
   }, [])
 
   // Tool shortcuts. Bound at the window because the toolbar buttons are not focused when a
@@ -86,14 +92,6 @@ export function App() {
       <div className="stage">
         <Board
           doc={doc}
-          tool={tool}
-          onSelectionChange={setSelection}
-          onShapeCountChange={setShapeCount}
-          onHistoryChange={(u, r) => {
-            setCanUndo(u)
-            setCanRedo(r)
-          }}
-          onZoomChange={setZoom}
           onReady={(controller) => {
             controllerRef.current = controller
           }}
@@ -101,7 +99,7 @@ export function App() {
         {shapeCount === 0 && <EmptyState toolLabel={TOOL_LABELS[tool]} />}
         <div className="cluster">
           <span className="board-name">Untitled board</span>
-          <SyncIndicator state={syncState} shapeCount={shapeCount} />
+          <SyncIndicator state={sync} shapeCount={shapeCount} />
         </div>
         <p className="status" role="status" aria-live="polite">
           {selection.length > 0

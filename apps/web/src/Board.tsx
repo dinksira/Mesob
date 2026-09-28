@@ -8,74 +8,42 @@ import {
 } from 'react'
 import type { Doc } from 'yjs'
 import { ShapeStore } from '@mesob/web-geometry'
-import { CanvasController, type Tool } from './canvas-controller.js'
-
-export interface BoardProps {
-  doc: Doc
-  tool: Tool
-  // Declared as property signatures rather than method signatures. A method signature is
-  // a declaration of something that can be called with a receiver, and these callbacks are
-  // stored in a plain object and invoked detached, so the arrow type is the honest one:
-  // it says there is no receiver to get wrong.
-  onSelectionChange: (ids: string[]) => void
-  onShapeCountChange: (count: number) => void
-  onHistoryChange: (canUndo: boolean, canRedo: boolean) => void
-  onZoomChange: (zoom: number) => void
-  /**
-   * Hand the controller up once it exists.
-   *
-   * The toolbar's undo and redo buttons live outside the canvas, but undo is a property of
-   * the document's UndoManager, which the controller owns. Dispatching a synthetic keydown
-   * at `window` to reach it is the kind of indirection that silently stops working the
-   * moment the handler moves; passing the controller up is one line and cannot.
-   */
-  onReady: (controller: CanvasController | null) => void
-}
+import { CanvasController } from './canvas-controller.js'
+import { boardState, useBoardStore } from './store.js'
 
 /**
  * The three-canvas stack.
  *
  * Three canvases, one job each, and the reason is not tidiness. Selection and presence
- * change every pointer move while the board does not, so putting them on the board canvas
- * means repainting every shape at 60fps to move a selection box. Three layers mean the
- * expensive one is only repainted when the document or the camera changes.
+ * change on every pointer move while the board does not, so putting them on the board
+ * canvas means repainting every shape at 60fps to move a selection box. Three layers mean
+ * the expensive one is only repainted when the document or the camera changes.
  *
- * This component owns no drawing code. It creates the controller, hands it the canvases
- * and the document, and forwards DOM events. The controller is created once and kept in a
- * ref: rebuilding it on a React render would drop the selection, the undo manager and the
- * frame loop, and React re-renders on every selection change.
+ * This component owns no drawing code and no application state. It creates the
+ * controller, hands it the canvases and the document, forwards DOM events, and reports
+ * what the controller did into the store.
+ *
+ * The controller is created once and kept in a ref: rebuilding it on a React render would
+ * drop the selection, the undo manager and the frame loop, and React re-renders on every
+ * selection change.
  */
 export function Board({
   doc,
-  tool,
-  onSelectionChange,
-  onShapeCountChange,
-  onHistoryChange,
-  onZoomChange,
   onReady,
-}: BoardProps) {
+}: {
+  doc: Doc
+  onReady: (controller: CanvasController | null) => void
+}) {
   const boardRef = useRef<HTMLCanvasElement | null>(null)
   const presenceRef = useRef<HTMLCanvasElement | null>(null)
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
   const controllerRef = useRef<CanvasController | null>(null)
-  const storeRef = useRef<ShapeStore | null>(null)
 
-  // Callbacks change identity every render. Holding them in a ref keeps the controller
-  // from having to be rebuilt just because a parent re-rendered.
-  const handlers = useRef({
-    onSelectionChange,
-    onShapeCountChange,
-    onHistoryChange,
-    onZoomChange,
-    onReady,
-  })
-  handlers.current = {
-    onSelectionChange,
-    onShapeCountChange,
-    onHistoryChange,
-    onZoomChange,
-    onReady,
-  }
+  // `onReady` is a prop and therefore a new function on every parent render. Held in a
+  // ref so it can be called from the mount effect without making that effect depend on
+  // the parent re-rendering, which would tear the controller down and build it again.
+  const readyRef = useRef(onReady)
+  readyRef.current = onReady
 
   useEffect(() => {
     const board = boardRef.current
@@ -83,28 +51,29 @@ export function Board({
     const overlay = overlayRef.current
     if (!board || !presence || !overlay) return
 
+    const state = boardState()
     const store = new ShapeStore()
-    storeRef.current = store
 
     const controller = new CanvasController(board, presence, overlay, doc, store, {
       onSelectionChange: (ids) => {
-        handlers.current.onSelectionChange(ids)
-        handlers.current.onHistoryChange(controller.canUndo, controller.canRedo)
+        state.setSelection(ids)
+        state.setHistory(controller.canUndo, controller.canRedo)
       },
       onShapeCountChange: (count) => {
-        handlers.current.onShapeCountChange(count)
-        handlers.current.onHistoryChange(controller.canUndo, controller.canRedo)
+        state.setShapeCount(count)
+        state.setHistory(controller.canUndo, controller.canRedo)
       },
     })
     controllerRef.current = controller
+    controller.setTool(state.tool)
     controller.start()
-    handlers.current.onReady(controller)
+    readyRef.current(controller)
 
     const resize = () => {
       const parent = board.parentElement
       if (!parent) return
       controller.resize(parent.clientWidth, parent.clientHeight, window.devicePixelRatio)
-      handlers.current.onZoomChange(controller.zoom)
+      boardState().setZoom(controller.zoom)
     }
     resize()
 
@@ -114,34 +83,32 @@ export function Board({
     if (board.parentElement) observer.observe(board.parentElement)
     window.addEventListener('resize', resize)
 
+    // The document can change underneath us — undo, a restore from storage, a second tab.
+    // The controller's refresh re-projects the store and remaps the selection by id, so an
+    // undo that changes the shape set cannot leave the selection pointing at another shape.
+    const onUpdate = () => {
+      controller.refresh()
+      state.setHistory(controller.canUndo, controller.canRedo)
+    }
+    doc.on('update', onUpdate)
+
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', resize)
+      doc.off('update', onUpdate)
       controller.stop()
       controllerRef.current = null
-      handlers.current.onReady(null)
+      readyRef.current(null)
     }
   }, [doc])
 
+  // The tool is a subscription, not a prop. The controller is told about it rather than
+  // reading the store itself so the dependency is visible here, and so a test can drive a
+  // controller without a store in scope.
+  const tool = useBoardStore((s) => s.tool)
   useEffect(() => {
     controllerRef.current?.setTool(tool)
   }, [tool])
-
-  // The document can change underneath us — undo, a restore from storage, a second tab.
-  // The controller's refresh re-projects the store and remaps the selection by id, so an
-  // undo of a z-affecting change cannot leave the selection pointing at a different shape.
-  useEffect(() => {
-    const controller = controllerRef.current
-    if (!controller) return
-    const onUpdate = () => {
-      controller.refresh()
-      handlers.current.onHistoryChange(controller.canUndo, controller.canRedo)
-    }
-    doc.on('update', onUpdate)
-    return () => {
-      doc.off('update', onUpdate)
-    }
-  }, [doc])
 
   const point = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -174,9 +141,10 @@ export function Board({
 
   const onWheel = useCallback((event: ReactWheelEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
-    controllerRef.current?.wheel(event.deltaY, event.clientX - rect.left, event.clientY - rect.top)
     const controller = controllerRef.current
-    if (controller) handlers.current.onZoomChange(controller.zoom)
+    if (!controller) return
+    controller.wheel(event.deltaY, event.clientX - rect.left, event.clientY - rect.top)
+    boardState().setZoom(controller.zoom)
   }, [])
 
   // Keyboard lives on the canvas, not the window: the canvas is a focusable application
@@ -187,10 +155,10 @@ export function Board({
     if (controller.key(event.key, event.shiftKey)) event.preventDefault()
   }, [])
 
-  // The pointer handlers are on the *bottom* layer. The overlay is above it and is focusable
-  // and transparent, so a canvas that is not `pointer-events: none` would take every event
-  // and the board would feel dead. The overlay keeps its tab stop and its role; it just
-  // does not intercept the mouse.
+  // The pointer handlers are on the *bottom* layer. The overlay is above it and is
+  // focusable and transparent, so a canvas that is not `pointer-events: none` would take
+  // every event and the board would feel dead. The overlay keeps its tab stop and its
+  // role; it just does not intercept the mouse.
   return (
     <div className="board">
       <canvas
