@@ -54,16 +54,27 @@ export function Board({
     const state = boardState()
     const store = new ShapeStore()
 
+    // A holder rather than a `const controller`, because the callbacks below are invoked
+    // from inside the constructor: it fills the store on the way in, which reports the
+    // shape count, which calls back in here. A `const controller = new CanvasController(`
+    // would have that callback read a binding still in its temporal dead zone, and the
+    // app would white-screen on the very first frame.
+    const handle = { controller: null as CanvasController | null }
+    const reportHistory = () => {
+      state.setHistory(handle.controller?.canUndo ?? false, handle.controller?.canRedo ?? false)
+    }
+
     const controller = new CanvasController(board, presence, overlay, doc, store, {
       onSelectionChange: (ids) => {
         state.setSelection(ids)
-        state.setHistory(controller.canUndo, controller.canRedo)
+        reportHistory()
       },
       onShapeCountChange: (count) => {
         state.setShapeCount(count)
-        state.setHistory(controller.canUndo, controller.canRedo)
+        reportHistory()
       },
     })
+    handle.controller = controller
     controllerRef.current = controller
     controller.setTool(state.tool)
     controller.start()
