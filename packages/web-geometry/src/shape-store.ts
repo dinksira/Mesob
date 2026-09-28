@@ -131,58 +131,77 @@ export class ShapeStore {
     return this.index.get(id) ?? -1
   }
 
+  /**
+   * One geometry field of one shape.
+   *
+   * `noUncheckedIndexedAccess` widens every typed-array read to `number | undefined`, and
+   * these indices are dense indices the store itself bounds, so it cannot actually be
+   * undefined. Paying for that with a cast at each of the forty reads below, or with a
+   * branch at each, would put the cost exactly where the file exists to keep it out of.
+   *
+   * So the check happens once, here. One comparison the branch predictor will never get
+   * wrong beats forty scattered ones. The alternative was a per-package tsconfig relaxing
+   * the flag, which does not work in this repo: packages are consumed as raw TypeScript
+   * source, so a consumer recompiles these files under its own settings and the relaxation
+   * would pass locally while failing on use. That is worse than no relaxation at all.
+   */
+  private f(i: number, field: Field): number {
+    const value = this.data[i * STRIDE + field]
+    return value ?? 0
+  }
+
   /** One geometry field, by stride offset. */
   get(i: number, field: Field): number {
-    return this.data[i * STRIDE + field]
+    return this.f(i, field)
   }
 
   x(i: number): number {
-    return this.data[i * STRIDE + Field.X]
+    return this.f(i, Field.X)
   }
 
   y(i: number): number {
-    return this.data[i * STRIDE + Field.Y]
+    return this.f(i, Field.Y)
   }
 
   w(i: number): number {
-    return this.data[i * STRIDE + Field.W]
+    return this.f(i, Field.W)
   }
 
   h(i: number): number {
-    return this.data[i * STRIDE + Field.H]
+    return this.f(i, Field.H)
   }
 
   rotation(i: number): number {
-    return this.data[i * STRIDE + Field.Rotation]
+    return this.f(i, Field.Rotation)
   }
 
   strokeWidth(i: number): number {
-    return this.data[i * STRIDE + Field.StrokeWidth]
+    return this.f(i, Field.StrokeWidth)
   }
 
   fillColorAt(i: number): string {
-    return colorAt(this.data[i * STRIDE + Field.FillIndex])
+    return colorAt(this.f(i, Field.FillIndex))
   }
 
   strokeColorAt(i: number): string {
-    return colorAt(this.data[i * STRIDE + Field.StrokeIndex])
+    return colorAt(this.f(i, Field.StrokeIndex))
   }
 
   /** Left edge of the shape's rotated bounds. */
   minX(i: number): number {
-    return this.data[i * STRIDE + Field.MinX]
+    return this.f(i, Field.MinX)
   }
 
   minY(i: number): number {
-    return this.data[i * STRIDE + Field.MinY]
+    return this.f(i, Field.MinY)
   }
 
   maxX(i: number): number {
-    return this.data[i * STRIDE + Field.MaxX]
+    return this.f(i, Field.MaxX)
   }
 
   maxY(i: number): number {
-    return this.data[i * STRIDE + Field.MaxY]
+    return this.f(i, Field.MaxY)
   }
 
   /**
@@ -310,12 +329,11 @@ export class ShapeStore {
     const right = viewX + viewW
     const bottom = viewY + viewH
     for (let i = 0; i < this.count && n < limit; i++) {
-      const base = i * STRIDE
       if (
-        this.data[base + Field.MaxX] >= viewX &&
-        this.data[base + Field.MinX] <= right &&
-        this.data[base + Field.MaxY] >= viewY &&
-        this.data[base + Field.MinY] <= bottom
+        this.f(i, Field.MaxX) >= viewX &&
+        this.f(i, Field.MinX) <= right &&
+        this.f(i, Field.MaxY) >= viewY &&
+        this.f(i, Field.MinY) <= bottom
       ) {
         out[n] = i
         n++
@@ -385,24 +403,23 @@ export class ShapeStore {
    */
   hitTest(worldX: number, worldY: number): number {
     for (let i = this.count - 1; i >= 0; i--) {
-      const base = i * STRIDE
       if (
-        this.data[base + Field.MaxX] < worldX ||
-        this.data[base + Field.MinX] > worldX ||
-        this.data[base + Field.MaxY] < worldY ||
-        this.data[base + Field.MinY] > worldY
+        this.f(i, Field.MaxX) < worldX ||
+        this.f(i, Field.MinX) > worldX ||
+        this.f(i, Field.MaxY) < worldY ||
+        this.f(i, Field.MinY) > worldY
       ) {
         continue
       }
       if (
         containsPoint(
-          this.data[base + Field.X],
-          this.data[base + Field.Y],
-          this.data[base + Field.W],
-          this.data[base + Field.H],
+          this.f(i, Field.X),
+          this.f(i, Field.Y),
+          this.f(i, Field.W),
+          this.f(i, Field.H),
           worldX,
           worldY,
-          this.data[base + Field.Rotation],
+          this.f(i, Field.Rotation),
         )
       ) {
         return i
@@ -423,12 +440,11 @@ export class ShapeStore {
     const right = worldX + worldW
     const bottom = worldY + worldH
     for (let i = this.count - 1; i >= 0; i--) {
-      const base = i * STRIDE
       if (
-        this.data[base + Field.MaxX] >= worldX &&
-        this.data[base + Field.MinX] <= right &&
-        this.data[base + Field.MaxY] >= worldY &&
-        this.data[base + Field.MinY] <= bottom
+        this.f(i, Field.MaxX) >= worldX &&
+        this.f(i, Field.MinX) <= right &&
+        this.f(i, Field.MaxY) >= worldY &&
+        this.f(i, Field.MinY) <= bottom
       ) {
         out.push(i)
       }

@@ -236,7 +236,7 @@ describe('cull', () => {
     ])
     const out = new Int32Array(16)
     expect(store.cull(0, 0, 100, 100, out)).toBe(1)
-    expect(store.idAt(out[0])).toBe('near')
+    expect(store.idAt(out[0] ?? -1)).toBe('near')
   })
 
   it('reuses the same buffer without clearing it, which is the no-allocation contract', () => {
@@ -299,7 +299,7 @@ describe('hit testing', () => {
     ])
     const out: number[] = []
     expect(store.hitTestRect(0, 0, 100, 100, out)).toBe(2)
-    expect(store.idAt(out[0])).toBe('b')
+    expect(store.idAt(out[0] ?? -1)).toBe('b')
   })
 
   it('selects nothing for an empty marquee', () => {
