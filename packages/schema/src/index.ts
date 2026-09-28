@@ -29,3 +29,26 @@ export type {
 // single resolved copy. The `pnpm.overrides` entry in the root package.json is what
 // guarantees that, and `packages/sim`'s single-instance test is what checks it.
 export { Doc, Map as YMap } from 'yjs'
+
+export {
+  MAX_DEVICE_PIXEL_RATIO,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  clampDevicePixelRatio,
+  clampZoom,
+  createViewport,
+  isVisible,
+  screenToWorld,
+  toTransform,
+  visibleBounds,
+  worldToScreen,
+  zoomAt,
+  zoomToFit,
+} from './transform.js'
+export type {
+  Bounds,
+  CanvasSize,
+  Viewport,
+  ViewportOptions,
+  ViewportTransform,
+} from './transform.js'
