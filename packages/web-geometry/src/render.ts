@@ -47,9 +47,19 @@ export interface RenderContext {
   strokeRect(x: number, y: number, w: number, h: number): void
   translate(x: number, y: number): void
   rotate(angle: number): void
-  set fillStyle(value: string)
-  set strokeStyle(value: string)
-  set lineWidth(value: number)
+  /**
+   * The real context's own union, not `string`.
+   *
+   * A real `CanvasRenderingContext2D` widens these to `string | CanvasGradient |
+   * CanvasPattern`, and a property of that type is not assignable to one declared `string`.
+   * Narrowing here would mean a cast at every call site of the renderer, which is exactly
+   * the sort of thing a cast at a boundary is supposed to avoid. This renderer only ever
+   * writes strings; the union is here so a real context satisfies the interface without
+   * one being asserted into it.
+   */
+  fillStyle: string | CanvasGradient | CanvasPattern
+  strokeStyle: string | CanvasGradient | CanvasPattern
+  lineWidth: number
 }
 
 export interface BoardStyle {
