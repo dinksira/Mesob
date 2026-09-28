@@ -181,12 +181,18 @@ export class BoardRenderer {
    *
    * On the overlay canvas, which is transparent, because selection is not part of the
    * document and must not be saved with it.
+   *
+   * `dx`/`dy` are a live drag offset in world units. A drag is not written to the
+   * document until the pointer comes up, so the preview has to come from somewhere and
+   * this is somewhere.
    */
   drawSelection(
     ctx: RenderContext,
     t: ViewportTransform,
     selected: readonly number[],
     color: string,
+    dx = 0,
+    dy = 0,
   ): void {
     if (selected.length === 0) return
     ctx.clearRect(0, 0, t.width, t.height)
@@ -198,8 +204,8 @@ export class BoardRenderer {
       if (i < 0 || i >= this.store.size) continue
       const w = this.store.w(i) * t.zoom
       const h = this.store.h(i) * t.zoom
-      const cx = (this.store.x(i) + this.store.w(i) / 2 - t.cameraX) * t.zoom + t.width / 2
-      const cy = (this.store.y(i) + this.store.h(i) / 2 - t.cameraY) * t.zoom + t.height / 2
+      const cx = (this.store.x(i) + dx + this.store.w(i) / 2 - t.cameraX) * t.zoom + t.width / 2
+      const cy = (this.store.y(i) + dy + this.store.h(i) / 2 - t.cameraY) * t.zoom + t.height / 2
       const rotation = this.store.get(i, Field.Rotation)
 
       ctx.save()
@@ -219,12 +225,19 @@ export class BoardRenderer {
    * would move four shapes in ways the user did not ask for, and Phase 1 has no group
    * transform to make that honest.
    */
-  drawHandles(ctx: RenderContext, t: ViewportTransform, i: number, fill: string): void {
+  drawHandles(
+    ctx: RenderContext,
+    t: ViewportTransform,
+    i: number,
+    fill: string,
+    dx = 0,
+    dy = 0,
+  ): void {
     if (i < 0 || i >= this.store.size) return
     const w = this.store.w(i) * t.zoom
     const h = this.store.h(i) * t.zoom
-    const cx = (this.store.x(i) + this.store.w(i) / 2 - t.cameraX) * t.zoom + t.width / 2
-    const cy = (this.store.y(i) + this.store.h(i) / 2 - t.cameraY) * t.zoom + t.height / 2
+    const cx = (this.store.x(i) + dx + this.store.w(i) / 2 - t.cameraX) * t.zoom + t.width / 2
+    const cy = (this.store.y(i) + dy + this.store.h(i) / 2 - t.cameraY) * t.zoom + t.height / 2
     const rotation = this.store.get(i, Field.Rotation)
 
     ctx.save()
