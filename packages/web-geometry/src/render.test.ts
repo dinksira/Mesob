@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Doc } from 'yjs'
-import { createRectShape, createViewport, toTransform } from '@mesob/schema'
+import { createEllipseShape, createRectShape, createViewport, toTransform } from '@mesob/schema'
 import { ShapeStore } from './shape-store.js'
 import {
   BoardRenderer,
@@ -37,6 +37,17 @@ class Recorder implements RenderContext {
   lineWidthWrites = 0
   /** Rects built into the current path. Shapes and selection boxes. */
   rects: [number, number, number, number][] = []
+  /** Ellipses built into the current path, with both radii and the box they span. */
+  ellipses: {
+    cx: number
+    cy: number
+    rx: number
+    ry: number
+    rotation: number
+    a0: number
+    a1: number
+    box: [number, number, number, number]
+  }[] = []
   /** Solid rects. The background wipe and the handles. */
   fillRects: [number, number, number, number][] = []
   backgroundWrites = 0
@@ -95,6 +106,30 @@ class Recorder implements RenderContext {
     // at the origin, and an assertion about where a shape lands on screen would pass for
     // the wrong reason.
     this.rects.push([x + this.tx, y + this.ty, w, h])
+  }
+  ellipse(
+    x: number,
+    y: number,
+    radiusX: number,
+    radiusY: number,
+    rotation: number,
+    a0: number,
+    a1: number,
+  ): void {
+    // Recorded as the box that spans the ellipse, so it can be asserted against the same
+    // numbers as a rect. Storing radii instead would let a test pass for a shape twice the
+    // size the document actually asked for. The angles are kept because a full turn is what
+    // closes the curve and anything else leaves a gap in the outline.
+    this.ellipses.push({
+      cx: x + this.tx,
+      cy: y + this.ty,
+      rx: radiusX,
+      ry: radiusY,
+      rotation,
+      a0,
+      a1,
+      box: [x + this.tx - radiusX, y + this.ty - radiusY, radiusX * 2, radiusY * 2],
+    })
   }
   moveTo(): void {
     this.paths++
@@ -162,6 +197,138 @@ const grid = (n: number) =>
     id: `s${String(i)}`,
     rect: { x: -300 + (i % 25) * 20, y: -250 + Math.floor(i / 25) * 20, w: 10, h: 10 },
   }))
+
+describe('ellipse rendering', () => {
+  const ellipseOf = (rect: { x: number; y: number; w: number; h: number }, rotation = 0) => {
+    const doc = new Doc()
+    createEllipseShape(doc, { id: 'e', rect, style: { rotation } })
+    const store = new ShapeStore()
+    store.refill(doc)
+    return store
+  }
+
+  it('draws an ellipse rather than its bounding box', () => {
+    const ctx = new Recorder()
+    new BoardRenderer(ellipseOf({ x: 0, y: 0, w: 200, h: 100 })).drawBoard(ctx, transform(), style)
+    expect(ctx.rects).toHaveLength(0)
+    expect(ctx.ellipses).toHaveLength(1)
+  })
+
+  it('centres the ellipse on the box and gives it the box as its semi-axes', () => {
+    const ctx = new Recorder()
+    new BoardRenderer(ellipseOf({ x: 0, y: 0, w: 200, h: 100 })).drawBoard(ctx, transform(), style)
+    const e = ctx.ellipses[0]!
+    // At the default camera, board (100, 50) is screen (500, 350).
+    expect(e.cx).toBe(500)
+    expect(e.cy).toBe(350)
+    expect(e.rx).toBe(100)
+    expect(e.ry).toBe(50)
+    expect(e.box).toEqual([400, 300, 200, 100])
+  })
+
+  // The real `ctx.ellipse` throws `IndexSizeError` on a negative radius, so a renderer
+  // that passed the stored width straight through would pass every test here and throw on
+  // the first leftward or upward drag in a browser. The sign is reachable because a drag
+  // is normalised by the caller, not by this layer.
+  it('takes absolute radii for a negative extent', () => {
+    const ctx = new Recorder()
+    new BoardRenderer(ellipseOf({ x: 200, y: 100, w: -200, h: -100 })).drawBoard(
+      ctx,
+      transform(),
+      style,
+    )
+    const e = ctx.ellipses[0]!
+    expect(e.rx).toBe(100)
+    expect(e.ry).toBe(50)
+    expect(e.cx).toBe(500)
+    expect(e.cy).toBe(350)
+  })
+
+  it('sweeps a full turn so the outline closes', () => {
+    const ctx = new Recorder()
+    new BoardRenderer(ellipseOf({ x: 0, y: 0, w: 40, h: 40 })).drawBoard(ctx, transform(), style)
+    const e = ctx.ellipses[0]!
+    expect(e.a0).toBe(0)
+    expect(e.a1).toBeCloseTo(Math.PI * 2, 10)
+  })
+
+  it('leaves the path unrotated and lets the transform carry the shape rotation', () => {
+    // The renderer already translates and rotates to the shape's centre, so passing a
+    // rotation to `ellipse` as well would apply the angle twice.
+    const ctx = new Recorder()
+    new BoardRenderer(ellipseOf({ x: 0, y: 0, w: 100, h: 40 }, 30)).drawBoard(
+      ctx,
+      transform(),
+      style,
+    )
+    expect(ctx.ellipses[0]!.rotation).toBe(0)
+    const expected = (30 * Math.PI) / 180
+    expect(ctx.rotations.some((r) => Math.abs(r - expected) < 1e-10)).toBe(true)
+  })
+
+  it('fills and strokes through the same path as a rect', () => {
+    const ctx = new Recorder()
+    new BoardRenderer(ellipseOf({ x: 0, y: 0, w: 60, h: 30 })).drawBoard(ctx, transform(), style)
+    expect(ctx.paths).toBe(1)
+    expect(ctx.fills).toBe(1)
+    expect(ctx.strokes).toBe(1)
+  })
+
+  it('skips the stroke at zero width, as a rect does', () => {
+    const doc = new Doc()
+    createEllipseShape(doc, {
+      id: 'e',
+      rect: { x: 0, y: 0, w: 60, h: 30 },
+      style: { strokeWidth: 0 },
+    })
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.fills).toBe(1)
+    expect(ctx.strokes).toBe(0)
+  })
+
+  it('batches the fill colour across a run of ellipses as well as rects', () => {
+    const doc = new Doc()
+    for (let i = 0; i < 200; i++) {
+      createEllipseShape(doc, {
+        id: `e${String(i)}`,
+        rect: { x: -200 + (i % 20) * 20, y: -150 + Math.floor(i / 20) * 20, w: 12, h: 12 },
+      })
+    }
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.fills).toBe(200)
+    expect(ctx.fillStyleWrites).toBe(2)
+  })
+
+  it('culls an ellipse by its stored box, and keeps one that intersects the view', () => {
+    const doc = new Doc()
+    createEllipseShape(doc, { id: 'in', rect: { x: 0, y: 0, w: 100, h: 100 } })
+    createEllipseShape(doc, { id: 'out', rect: { x: 50000, y: 50000, w: 10, h: 10 } })
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.ellipses.map((e) => e.box)).toEqual([[400, 300, 100, 100]])
+  })
+
+  it('still frames a selected ellipse with a box and eight handles', () => {
+    // The point of storing an ellipse as its box: everything that frames a shape speaks in
+    // boxes, so none of it needed a new case for this type.
+    const doc = new Doc()
+    createEllipseShape(doc, { id: 'e', rect: { x: 0, y: 0, w: 200, h: 100 } })
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawSelection(ctx, transform(), [0], '#2563eb')
+    expect(ctx.rects).toHaveLength(1)
+    expect(ctx.ellipses).toHaveLength(0)
+  })
+})
 
 describe('BoardRenderer', () => {
   it('sets fillStyle once for a run of identical shapes', () => {

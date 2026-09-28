@@ -38,6 +38,25 @@ export interface RenderContext {
   clearRect(x: number, y: number, w: number, h: number): void
   beginPath(): void
   rect(x: number, y: number, w: number, h: number): void
+  /**
+   * Radii are absolute by contract.
+   *
+   * `ctx.rect` accepts a negative width and quietly draws the same rect, so a shape
+   * dragged to negative extents has worked so far. `ctx.ellipse` throws
+   * `IndexSizeError` on a negative radius, so a renderer that passed the stored width
+   * straight through would work in tests and throw on the first leftward drag in a
+   * browser. Taking the absolute value here keeps the degenerate case out of the call
+   * site and matches what `rect` was already doing implicitly.
+   */
+  ellipse(
+    x: number,
+    y: number,
+    radiusX: number,
+    radiusY: number,
+    rotation: number,
+    a0: number,
+    a1: number,
+  ): void
   moveTo(x: number, y: number): void
   lineTo(x: number, y: number): void
   closePath(): void
@@ -70,6 +89,9 @@ export interface BoardStyle {
 
 /** Handle size and outline width, in screen pixels, so they do not scale with zoom. */
 export const HANDLE_SIZE = 8
+
+/** A full turn. `ctx.ellipse` takes start and end angles, and 2*PI closes the curve. */
+const TAU = Math.PI * 2
 export const SELECTION_STROKE = 1.5
 export const MARQUEE_STROKE = 1
 
@@ -169,7 +191,18 @@ export class BoardRenderer {
     ctx.translate(cx, cy)
     if (rotation !== 0) ctx.rotate((rotation * Math.PI) / 180)
     ctx.beginPath()
-    ctx.rect(-w / 2, -h / 2, w, h)
+    // The transform above is already about the centre and the shape's own rotation, so
+    // the path is built centred on the origin and unrotated. The only type-specific
+    // decision is which primitive spans the box; the fill, stroke, and width above it
+    // are already shared, and the selection chrome below draws the same box for both.
+    switch (this.store.shapeAt(i)?.type) {
+      case 'rect':
+        ctx.rect(-w / 2, -h / 2, w, h)
+        break
+      case 'ellipse':
+        ctx.ellipse(0, 0, Math.abs(w) / 2, Math.abs(h) / 2, 0, 0, TAU)
+        break
+    }
     ctx.fill()
     if (this.store.strokeWidth(i) > 0) ctx.stroke()
     ctx.restore()
