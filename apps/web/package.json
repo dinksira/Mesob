@@ -16,7 +16,9 @@
     "@mesob/web-geometry": "workspace:*",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "yjs": "^13.6.0"
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",
