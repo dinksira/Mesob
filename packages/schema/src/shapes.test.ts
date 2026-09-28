@@ -3,6 +3,7 @@ import { Map as YMap, Doc } from 'yjs'
 import { after, between, first } from './fractional-index.js'
 import {
   boundsFor,
+  createEllipseShape,
   createRectShape,
   deleteShape,
   hitTest,
@@ -10,7 +11,7 @@ import {
   readShape,
   shapesMap,
 } from './shapes.js'
-import type { Shape } from './shapes.js'
+import type { EllipseShape, Shape } from './shapes.js'
 
 const doc = () => new Doc()
 
@@ -221,5 +222,46 @@ describe('z-order integration', () => {
     const z = readShape(map)!.z
     expect(z > first()).toBe(true)
     expect(z < after(first())).toBe(true)
+  })
+})
+
+describe('ellipse', () => {
+  const box = { x: 0, y: 0, w: 200, h: 100 }
+
+  const ellipse = (over: Partial<EllipseShape> = {}): EllipseShape => ({
+    id: 'e1',
+    type: 'ellipse',
+    z: first(),
+    lastDeleted: false,
+    fill: '#fff',
+    stroke: '#000',
+    strokeWidth: 1,
+    rotation: 0,
+    ...box,
+    ...over,
+  })
+
+  it('round-trips through the document', () => {
+    const d = doc()
+    createEllipseShape(d, { id: 'e1', rect: box })
+    const shape = readShape(shapesMap(d).get('e1')!)
+    expect(shape?.type).toBe('ellipse')
+    if (shape?.type !== 'ellipse') throw new Error('expected an ellipse')
+    expect(shape.x).toBe(0)
+    expect(shape.w).toBe(200)
+    expect(shape.h).toBe(100)
+  })
+
+  it('is framed by the same box as a rect of the same extent', () => {
+    // This is the load-bearing claim: an ellipse is described by a box, so everything
+    // that frames shapes (culling, selection chrome, the eight handles) needs no new case.
+    expect(boundsFor(ellipse())).toEqual({ x: 0, y: 0, w: 200, h: 100 })
+  })
+
+  it('ignores a stored type it does not know', () => {
+    const d = doc()
+    const map = createEllipseShape(d, { id: 'e1', rect: box })
+    map.set('type', 'hexagon')
+    expect(readShape(map)).toBeNull()
   })
 })

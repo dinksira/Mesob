@@ -6,6 +6,7 @@ export {
   SHAPES_KEY,
   SHAPE_TYPES,
   boundsFor,
+  createEllipseShape,
   createRectShape,
   deleteShape,
   hitTest,
@@ -14,7 +15,9 @@ export {
   shapesMap,
 } from './shapes.js'
 export type {
+  BoxedShape,
   CreateShapeParams,
+  EllipseShape,
   Point,
   Rect,
   RectShape,

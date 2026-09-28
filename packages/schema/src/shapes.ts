@@ -31,7 +31,7 @@ import { Map as YMap, type Doc } from 'yjs'
 import { first, type Key } from './fractional-index.js'
 
 /** Discriminants. Adding a member means adding a case to every function below. */
-export const SHAPE_TYPES = ['rect'] as const
+export const SHAPE_TYPES = ['rect', 'ellipse'] as const
 export type ShapeType = (typeof SHAPE_TYPES)[number]
 
 /** A shape's position and size in board coordinates. */
@@ -71,8 +71,35 @@ export interface RectShape extends Rect, Style {
   lastDeleted: boolean
 }
 
-/** Every shape. One member today; the union is the point. */
-export type Shape = RectShape
+/**
+ * An ellipse, inscribed in the box `x`/`y`/`w`/`h`.
+ *
+ * Stored as its box rather than as a centre and two radii, because that is the geometry
+ * every box operation already speaks: culling, framing, the selection box, the eight
+ * handles, a drag to create. A shape that cannot be resized with the existing handles
+ * would need a second interaction model, and this one gets none.
+ */
+export interface EllipseShape extends Rect, Style {
+  type: 'ellipse'
+  id: string
+  /** Fractional z-order key. Opaque: see `fractional-index.ts`. */
+  z: Key
+  /** See [ADR-0002](../docs/adr/0002-shape-representation-and-z-order.md). */
+  lastDeleted: boolean
+}
+
+/**
+ * Every shape.
+ *
+ * The point of a union here is that the compiler knows when a new type has missed a
+ * dispatch. `boundsFor` and `readShape` switch on `type` with no default branch, so
+ * adding a member without handling it is a type error rather than a shape that silently
+ * fails to draw.
+ */
+export type Shape = RectShape | EllipseShape
+
+/** The members that are described by a box. Both of today's shapes, for now. */
+export type BoxedShape = RectShape | EllipseShape
 
 export const DEFAULT_STYLE: Style = {
   fill: '#ffffff',
@@ -116,6 +143,15 @@ export interface CreateShapeParams {
  * that state deliberately as well.
  */
 export function createRectShape(doc: Doc, params: CreateShapeParams): ShapeMap {
+  return insertShape(doc, 'rect', params)
+}
+
+/** Create an ellipse inscribed in `params.rect` and insert it. Same storage as a rect. */
+export function createEllipseShape(doc: Doc, params: CreateShapeParams): ShapeMap {
+  return insertShape(doc, 'ellipse', params)
+}
+
+function insertShape(doc: Doc, type: ShapeType, params: CreateShapeParams): ShapeMap {
   const shapes = shapesMap(doc)
   if (shapes.has(params.id)) {
     throw new Error(`shape ${params.id} already exists`)
@@ -123,7 +159,7 @@ export function createRectShape(doc: Doc, params: CreateShapeParams): ShapeMap {
 
   const shape: ShapeMap = new YMap()
   shape.set('id', params.id)
-  shape.set('type', 'rect' satisfies ShapeType)
+  shape.set('type', type)
   shape.set('z', params.z ?? first())
   shape.set('lastDeleted', false)
   shape.set('x', params.rect?.x ?? DEFAULT_RECT.x)
@@ -159,10 +195,17 @@ function str(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback
 }
 
-function readRect(map: ShapeMap): RectShape {
+/**
+ * Read a stored map that describes a box.
+ *
+ * Rect and ellipse store identical fields and share every default, so they share a
+ * reader and differ only in the discriminant. `line` and `pen` will not fit this shape,
+ * and that is the signal to stop generalising.
+ */
+function readBoxed(map: ShapeMap, type: 'rect' | 'ellipse'): BoxedShape {
   return {
     id: str(map.get('id'), ''),
-    type: 'rect',
+    type,
     z: str(map.get('z'), first()),
     lastDeleted: map.get('lastDeleted') === true,
     x: num(map.get('x'), DEFAULT_RECT.x),
@@ -202,7 +245,9 @@ export function readShape(map: ShapeMap): Shape | null {
   if (!isShapeMap(map)) return null
   switch (map.get('type')) {
     case 'rect':
-      return readRect(map)
+      return readBoxed(map, 'rect')
+    case 'ellipse':
+      return readBoxed(map, 'ellipse')
     default:
       return null
   }
@@ -230,10 +275,20 @@ export function readBoard(doc: Doc): [string, Shape][] {
   return out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 }
 
-/** Axis-aligned bounds in board coordinates, before rotation. */
+/**
+ * Axis-aligned bounds in board coordinates, before rotation.
+ *
+ * The ellipse case returns the same box the rect case does, and that is the point rather
+ * than an oversight: everything that frames a shape — culling, the selection box, the
+ * eight handles — speaks in boxes, and an ellipse inscribed in one is framed by it. A
+ * `line` will be the first type whose bounds are not its own box, and that is where this
+ * function earns the switch it already has.
+ */
 export function boundsFor(shape: Shape): Rect {
   switch (shape.type) {
     case 'rect':
+      return { x: shape.x, y: shape.y, w: shape.w, h: shape.h }
+    case 'ellipse':
       return { x: shape.x, y: shape.y, w: shape.w, h: shape.h }
   }
 }
