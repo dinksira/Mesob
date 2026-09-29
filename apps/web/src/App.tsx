@@ -46,6 +46,30 @@ export function App() {
     }
   }, [doc])
 
+  // The G1 performance gates need to put 5,000 shapes on a board, and there is no honest
+  // way to do that by hand or over the wire. `import.meta.env.DEV` is a constant `false` in
+  // a production build, so this branch never runs there, and the seeder is a dynamic import
+  // rather than a static one because a static import would be hoisted above the guard.
+  // Verified rather than assumed: a real `vite build` produces a 334kB bundle with no seeder
+  // chunk and no reference to one, and the G1 suite asserts at runtime that the hook is
+  // absent from a production build.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    let dispose: (() => void) | undefined
+    let cancelled = false
+    void import('./perf-seed.js').then((m) => {
+      if (cancelled) return
+      m.exposePerfHook(doc, () => controllerRef.current)
+      dispose = () => {
+        delete window.__mesobPerf
+      }
+    })
+    return () => {
+      cancelled = true
+      dispose?.()
+    }
+  }, [doc])
+
   const onUndo = useCallback(() => {
     const controller = controllerRef.current
     if (!controller) return

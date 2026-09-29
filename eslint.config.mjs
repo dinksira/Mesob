@@ -44,6 +44,10 @@ export default tseslint.config(
   {
     // Tests assert on values the compiler cannot narrow, and `expect(x).not.toBeNull()`
     // followed by `x!` is the idiomatic way to say so.
+    //
+    // `no-console` is off here because a test that measures something has to report what it
+    // measured: a passing frame budget is not a number anyone can act on, and the vitest
+    // reporter swallows anything a test writes as return values.
     files: ['**/*.test.ts', '**/*.test.tsx'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
@@ -51,6 +55,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-confusing-void-expression': 'off',
+      'no-console': 'off',
     },
   },
   {
