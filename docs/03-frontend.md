@@ -183,12 +183,17 @@ conservative (it returns extra candidates, and the draw pass re-tests exact boun
 3. Per shape: reject if the AABB test fails (cheap), then the precise test:
      rect   → point-in-rect
      ellipse→ normalised radius ≤ 1
+     note   → point-in-rect (it is boxed)
+     line   → min distance to the segment ≤ tolerance / zoom
      pen    → min distance to any segment ≤ tolerance / zoom
-     arrow  → distance to segments
-     text   → cached measured bounds
-     image  → point-in-rect
 4. Respect handles: if a resize/rotate handle is under the pointer, it wins over the shape.
 ```
+
+The AABB is a rejection test, never the answer. A line and a pen both derive a box from their
+geometry, and hitting that box would mean selecting a line by clicking the empty space inside its
+bounding rectangle — a shape the user cannot see the edge of, selected by a region they would
+describe as "not on the line". Derived boxes are for culling and for handles; hit testing always
+falls through to the geometry.
 
 Every precise test takes `tolerance / zoom` so hit targets feel identical at every zoom level — a
 small detail that users notice immediately and reviewers notice on close inspection.
@@ -214,26 +219,48 @@ Tools are a state machine, not a pile of booleans. One `activeTool` plus a discr
 tool parameters.
 
 ```ts
-type Tool =
-  | { kind: 'select' }
-  | { kind: 'pan' }
-  | { kind: 'rect' | 'ellipse' | 'note' | 'text' | 'arrow' | 'pen' | 'image' }
+type Tool = 'select' | 'rect' | 'ellipse' | 'note' | 'line' | 'pen'
 ```
+
+Interaction is dispatched on a `TOOL_KIND` map — one value per tool saying whether it is a
+select, a box, a segment or a freehand stroke. The interaction itself is a discriminated union,
+so the pointer handler switches rather than carrying booleans, and adding a tool means adding one
+map entry rather than a branch in four places.
 
 | Tool | Interaction | Commit to Yjs |
 |---|---|---|
 | `select` | Click, shift-click to extend, drag to move, 8 resize handles + rotate handle, marquee on empty space | On pointer-up. Live drag is a local transform applied at draw time |
 | `pan` | Drag, space-drag from any tool, middle-mouse, trackpad two-finger | Nothing. Camera is Zustand |
 | `rect`/`ellipse` | Drag or click for default size | On pointer-up: create the `Y.Map` |
-| `note` | Click, type inline, drag to reposition | Create on first keystroke, then per keystroke |
-| `text` | Click, type | Same as note, different style preset |
-| `arrow` | Drag from a shape edge; snaps to shape anchors | On pointer-up |
-| `pen` | Freehand drag; points coalesced and simplified | On pointer-up (Ramer–Douglas–Peucker, 0.6 px tolerance) |
+| `note` | Drag for a sized note, or click for a default 180×120 one; then a DOM `<textarea>` over the note | Note on pointer-up, then one write per keystroke |
+| `line` | Drag between two points | On pointer-up: one segment, `head: false` |
+| `pen` | Freehand drag; samples coalesced at 1.5 px and simplified | On pointer-up (Ramer–Douglas–Peucker, 0.6 px tolerance) |
+
+**`line` covers arrows.** There is one line tool and one primitive: `x1/y1/x2/y2` plus an
+optional `head` flag that draws an arrowhead at the far end, arms behind the tip and reversed
+when the line is drawn right-to-left. A separate `arrow` tool that could snap to shape anchors
+is Phase 2 — see below.
+
+**Notes are boxed, text is not the shape.** A note stores its geometry as `x/y/w/h` and its text
+as a string under last-writer-wins. That is why a note resizes from the same handles as a
+rectangle, and why a note on a peer's board is editable at the same moment it is on yours. Text
+lives in a DOM `<textarea>` over the canvas rather than drawn into it, because a caret and an IME
+composition are not something a canvas can host.
+
+**Not in Phase 1.** The design below also describes `text` as a separate rich-text tool,
+`image` placement, and `arrow` connectors that snap to shape anchors and orphan rather than
+delete when their target is deleted. None of those are built; the table above is the whole of
+what exists.
 
 **Live drag is a pure render transform.** During a drag, the shape's Yjs position is *not* touched
 until pointer-up. Two reasons: 60 writes/second of `Y.Map.set` would flood the network and the
 update log, and CRDT updates during a drag make remote conflict visualisation meaningless. The
 dragged shape is drawn with an override transform, and one authoritative write lands at the end.
+
+The pen is the deliberate exception: a stroke is previewed on the overlay as it is sampled and
+written once, on pointer-up, because there is no transform that makes an unsimplified path look
+like the final one, and a document holding a thousand points per second of dragging is a document
+nobody can undo through.
 
 ### Transform maths
 
