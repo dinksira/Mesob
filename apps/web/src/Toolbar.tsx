@@ -4,9 +4,9 @@ const TOOLS: { id: Tool; label: string; glyph: string; available: boolean }[] = 
   { id: 'select', label: 'Select', glyph: '⭢', available: true },
   { id: 'rect', label: 'Rectangle', glyph: '▭', available: true },
   { id: 'ellipse', label: 'Ellipse', glyph: '◯', available: true },
-  { id: 'line', label: 'Line', glyph: '╱', available: false },
-  { id: 'pen', label: 'Pen', glyph: '✎', available: false },
-  { id: 'note', label: 'Note', glyph: '❝', available: false },
+  { id: 'line', label: 'Line', glyph: '╱', available: true },
+  { id: 'pen', label: 'Pen', glyph: '✎', available: true },
+  { id: 'note', label: 'Note', glyph: '❝', available: true },
 ]
 
 const SHORTCUTS: Record<Tool, string> = {
@@ -40,15 +40,22 @@ export interface ToolbarProps {
 }
 
 /**
- * The left-edge tool list.
+ * The tool list, in a floating pill on the bottom edge.
  *
- * 44px, always visible, icon-only. A hover-revealed toolbar is a discoverability tax and
- * Phase 1 has no command palette to teach the shortcuts, so it stays put.
+ * Hover-revealed, which is the Figma arrangement and the one this component's own design
+ * note used to argue against. Two things make it hold up here. The reveal is not hover-only:
+ * `:focus-within` raises the pill too, so the keyboard can reach every tool, and a toolbar a
+ * mouse can summon but a keyboard cannot is a worse regression than the discoverability tax
+ * it trades for. And the pill floats over the board rather than sitting in a lane beside it,
+ * so the cost is a 12px hotspot along the bottom edge instead of a 44px column down the
+ * whole left side.
  *
  * `aria-pressed` rather than a class, because a toolbar that only looks selected is a
- * toolbar a screen reader cannot use. The tools that Phase 1 has not built are `disabled`
- * and not merely inert: an enabled button that silently does nothing is worse than a
- * visibly unavailable one.
+ * toolbar a screen reader cannot use. The `available` flag is kept rather than deleted with
+ * the tools it used to disable: a tool that is not built yet is `disabled` and not merely
+ * inert, because an enabled button that silently does nothing is worse than a visibly
+ * unavailable one, and the next tool to arrive should be one flag rather than a decision
+ * about which half of that to give up.
  */
 export function Toolbar({ tool, onToolChange, canUndo, canRedo, onUndo, onRedo }: ToolbarProps) {
   return (

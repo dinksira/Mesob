@@ -30,6 +30,19 @@ export interface BoardStore {
   sync: SyncState
   canUndo: boolean
   canRedo: boolean
+  /**
+   * The note being typed into, by id, or null.
+   *
+   * Local, like the selection, and for the same reason plus one more: a note editor open
+   * in this tab is a fact about this tab. Two people on one board must not be able to put
+   * each other into text editing — a shared caret is not a thing the design has, and
+   * making it one would be inventing a feature rather than building the one asked for.
+   *
+   * The id crosses this boundary rather than a store index for the reason the selection
+   * does, and one more: the editor is opened by a shape that a remote update can delete,
+   * and an index would by then be pointing at something else.
+   */
+  noteEditId: string | null
 
   setTool: (tool: Tool) => void
   setViewport: (viewport: Viewport) => void
@@ -38,6 +51,7 @@ export interface BoardStore {
   setZoom: (zoom: number) => void
   setSync: (sync: SyncState) => void
   setHistory: (canUndo: boolean, canRedo: boolean) => void
+  setNoteEditId: (id: string | null) => void
 }
 
 export const useBoardStore = create<BoardStore>((set) => ({
@@ -49,6 +63,7 @@ export const useBoardStore = create<BoardStore>((set) => ({
   sync: 'unavailable',
   canUndo: false,
   canRedo: false,
+  noteEditId: null,
 
   setTool: (tool) => {
     set({ tool })
@@ -67,6 +82,11 @@ export const useBoardStore = create<BoardStore>((set) => ({
   },
   setSync: (sync) => {
     set({ sync })
+  },
+  setNoteEditId: (noteEditId) => {
+    // Same reasoning as `setHistory`: the controller reports this on every pointer-down that
+    // closes an editor, which is most of them.
+    set((state) => (state.noteEditId === noteEditId ? state : { noteEditId }))
   },
   // Compared before writing, because the controller reports history after every
   // document update. Two boolean flags are not worth a render, and an update that

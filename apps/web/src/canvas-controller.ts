@@ -18,15 +18,19 @@ import type { ShapeStore } from '@mesob/web-geometry'
 import { BoardRenderer, hitHandle } from '@mesob/web-geometry'
 import {
   createEllipseShape,
+  createLineShape,
+  createNoteShape,
+  createPenShape,
   createRectShape,
   createViewport,
   isBoxedShape,
   screenToWorld,
   shapesMap,
   toTransform,
+  translateShape,
   zoomAt,
   clampDevicePixelRatio,
-  type CreateShapeParams,
+  DEFAULT_NOTE_RECT,
   type ShapeMap,
   type Viewport,
   type ViewportTransform,
@@ -37,26 +41,42 @@ import { UndoManager } from 'yjs'
 export type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'pen' | 'note'
 
 /**
- * The creator for each tool that draws a shape, and absent for the tools that do not.
+ * What kind of thing a tool produces.
  *
- * A keyed table rather than an `if` in each of the two places that need to know. Those
- * two are pointer-down, which decides whether a drag is a draw, and pointer-up, which
- * creates the shape; if they disagreed, a drag would either do nothing or create a shape
- * nobody asked for, and only one of the two would be covered by a test. A tool with no
- * entry here is a tool that cannot draw, which is what makes the next drawable type one
- * line rather than an edit in two branches.
+ * A `Record` over `Tool` rather than a table of creator functions, because the three
+ * drawable tools do not share a creation signature: a box tool takes a rectangle, a line
+ * takes two endpoints, and a pen takes a run of points. The old table of creators could
+ * only hold the boxed ones, and its own comment already admitted that `line` and `pen` "do
+ * not fit this signature" — a table whose type says two of its five tools cannot appear is
+ * a table that will be extended by a cast.
  *
- * Only types described by a box can appear. `line` and `pen` are not, and adding them
- * means giving them an entry that does not fit this signature.
+ * The important property is preserved rather than lost: pointer-down and pointer-up both
+ * read *this* table, so "is this a draw, and what kind" has one answer. If they disagreed, a
+ * drag would either do nothing or create a shape nobody asked for, and only one of the two
+ * would be covered by a test.
  */
-const DRAWERS: Partial<Record<Tool, (doc: Doc, params: CreateShapeParams) => ShapeMap>> = {
-  rect: createRectShape,
-  ellipse: createEllipseShape,
+const TOOL_KIND: Record<Tool, 'box' | 'line' | 'stroke' | 'none'> = {
+  select: 'none',
+  rect: 'box',
+  ellipse: 'box',
+  note: 'box',
+  line: 'line',
+  pen: 'stroke',
 }
+
+/** A click with a box or line tool makes no shape. One screen pixel, not one world unit. */
+const MIN_DRAG_PX = 1
+/** Points closer together than this on screen are the same point. Freehand input is dense. */
+const STROKE_SAMPLE_PX = 1.5
+/** Ramer-Douglas-Peucker tolerance, in screen pixels. Below this, a point is not a shape. */
+const STROKE_SIMPLIFY_PX = 0.6
+/** A pen's one-point run, duplicated on commit so a tap leaves a dot rather than nothing. */
 
 export type Interaction =
   | { kind: 'idle' }
   | { kind: 'draw'; originX: number; originY: number; x: number; y: number; w: number; h: number }
+  | { kind: 'line'; originX: number; originY: number; x: number; y: number }
+  | { kind: 'stroke'; count: number }
   | { kind: 'move'; dx: number; dy: number }
   | { kind: 'resize'; handle: number; shape: number; x: number; y: number; w: number; h: number }
   | { kind: 'marquee'; x: number; y: number; w: number; h: number }
@@ -81,11 +101,21 @@ const COLORS = {
   selection: '#5b3a52',
   handleFill: '#faf7f2',
   presence: '#b8463a',
+  /** An in-progress line or stroke. The stroke colour, at the opacity of a draft. */
+  preview: '#2a2622',
 }
 
 export interface BoardCallbacks {
   onSelectionChange(ids: string[]): void
   onShapeCountChange(count: number): void
+  /**
+   * The note being edited changed, or stopped being edited.
+   *
+   * The id, not a store index: a dense index is a position in z order and the note can be
+   * reordered or deleted underneath the editor, at which point the index silently points at
+   * something else and the user is typing into it.
+   */
+  onNoteEditChange(id: string | null): void
 }
 
 export class CanvasController {
@@ -117,6 +147,20 @@ export class CanvasController {
   /** Pointer-down position for a move, so the drag is measured from where it started. */
   private moveOriginX = 0
   private moveOriginY = 0
+
+  /**
+   * The pen's point buffer, preallocated and reused across strokes.
+   *
+   * The design is explicit that this may not be allocated per pointer-move, because a fresh
+   * array per sample is exactly the garbage collection the zero-allocation draw loop exists
+   * to avoid. It grows by doubling and is never released: a second stroke reuses whatever
+   * the first one left, which is why there is no `Float32Array` anywhere in the move path.
+   */
+  private strokeBuffer = new Float32Array(512)
+  /** Points in `strokeBuffer`, counted in points rather than floats. */
+  private strokeCount = 0
+  /** The note currently being typed into, by id. */
+  private editingId: string | null = null
 
   private board: HTMLCanvasElement
   private presence: HTMLCanvasElement
@@ -179,6 +223,86 @@ export class CanvasController {
   setTool(tool: Tool): void {
     this.activeTool = tool
     this.cursor = tool === 'select' ? 'default' : 'crosshair'
+    // Switching tools is an implicit "I am done with that note". Leaving the editor open
+    // over a shape the user has moved on from is how a stray keystroke ends up in a note
+    // that is no longer under the cursor.
+    if (tool !== 'note') this.endNoteEdit()
+  }
+
+  /** The note being typed into, by id, or null. */
+  get noteEditId(): string | null {
+    return this.editingId
+  }
+
+  /**
+   * A note's current text, for the editor's initial value.
+   *
+   * Read through the store rather than the document so a peer that has already changed the
+   * text is the value the field opens on. The store is the projection the renderer is
+   * drawing, and an editor that opened on a different version of the note than the one on
+   * screen would be a second source of truth.
+   */
+  noteText(id: string): string {
+    const i = this.store.indexOf(id)
+    if (i < 0) return ''
+    const shape = this.store.shapeAt(i)
+    return shape?.type === 'note' ? shape.text : ''
+  }
+
+  /**
+   * Begin editing a note. False if the id is not a note in the store.
+   *
+   * Checked rather than assumed: the id comes from a keyboard selection or a previous
+   * creation, and between the two the shape can be deleted, undone away, or — from a peer —
+   * have been something else entirely.
+   */
+  beginNoteEdit(id: string): boolean {
+    const i = this.store.indexOf(id)
+    if (i < 0 || this.store.shapeAt(i)?.type !== 'note') return false
+    this.editingId = id
+    this.callbacks.onNoteEditChange(id)
+    return true
+  }
+
+  endNoteEdit(): void {
+    if (this.editingId === null) return
+    this.editingId = null
+    this.callbacks.onNoteEditChange(null)
+  }
+
+  /**
+   * Write text into the note being edited.
+   *
+   * One document write per keystroke, which looks like it contradicts the drag rule and is
+   * not the same rule: a drag can be previewed as a transform because the shape already
+   * exists, whereas text has to be written to be seen, and the peer is not waiting for a
+   * more polite moment. The UndoManager's 300ms capture window is what keeps it from
+   * becoming a hundred undo steps.
+   */
+  setNoteText(text: string): void {
+    const id = this.editingId
+    if (id === null) return
+    const map = shapesMap(this.doc).get(id)
+    if (!map) {
+      this.endNoteEdit()
+      return
+    }
+    this.doc.transact(() => {
+      map.set('text', text)
+    }, LOCAL_ORIGIN)
+    this.refresh()
+  }
+
+  /** The note's box in screen pixels, for the editor to sit over. False if there is none. */
+  noteScreenRect(id: string, out: { x: number; y: number; w: number; h: number }): boolean {
+    const i = this.store.indexOf(id)
+    if (i < 0) return false
+    const t = this.transform
+    out.x = (this.store.minX(i) - t.cameraX) * t.zoom + t.width / 2
+    out.y = (this.store.minY(i) - t.cameraY) * t.zoom + t.height / 2
+    out.w = this.store.w(i) * t.zoom
+    out.h = this.store.h(i) * t.zoom
+    return true
   }
 
   undoStep(): void {
@@ -255,6 +379,29 @@ export class CanvasController {
     } else if (this.interaction.kind === 'draw') {
       const d = this.interaction
       this.renderer.drawMarquee(overlay, this.transform, d.x, d.y, d.w, d.h, COLORS.selection)
+    } else if (this.interaction.kind === 'line') {
+      const l = this.interaction
+      this.renderer.drawSegment(
+        overlay,
+        this.transform,
+        l.originX,
+        l.originY,
+        l.x,
+        l.y,
+        COLORS.preview,
+      )
+    } else if (this.interaction.kind === 'stroke' && this.strokeCount > 0) {
+      // Previewed from the buffer rather than from a shape, because the shape does not
+      // exist yet and creating it would mean a document write per pointer-move — the exact
+      // flooding of the update log the drag rule exists to prevent. The pen is the design's
+      // stated exception to live drag, and this is what that exception looks like.
+      this.renderer.drawStroke(
+        overlay,
+        this.transform,
+        this.strokeBuffer,
+        this.strokeCount,
+        COLORS.preview,
+      )
     }
   }
 
@@ -274,10 +421,26 @@ export class CanvasController {
       return
     }
 
-    if (DRAWERS[this.activeTool]) {
-      this.interaction = { kind: 'draw', originX: wx, originY: wy, x: wx, y: wy, w: 0, h: 0 }
-      this.select([])
-      return
+    // A pointer on the canvas is a pointer that has left the note. The editor itself is a
+    // DOM element above the canvas, so clicking inside the note never reaches this line.
+    this.endNoteEdit()
+
+    switch (TOOL_KIND[this.activeTool]) {
+      case 'box':
+        this.interaction = { kind: 'draw', originX: wx, originY: wy, x: wx, y: wy, w: 0, h: 0 }
+        this.select([])
+        return
+      case 'line':
+        this.interaction = { kind: 'line', originX: wx, originY: wy, x: wx, y: wy }
+        this.select([])
+        return
+      case 'stroke':
+        this.interaction = { kind: 'stroke', count: 0 }
+        this.pushStrokePoint(wx, wy)
+        this.select([])
+        return
+      case 'none':
+        break
     }
 
     // Select tool. A handle under the pointer beats a shape under the pointer, or a
@@ -335,6 +498,19 @@ export class CanvasController {
         d.h = p.y - d.originY
         return
       }
+      case 'line': {
+        this.interaction.x = p.x
+        this.interaction.y = p.y
+        return
+      }
+      case 'stroke': {
+        // Coalesced: a pointer that has not travelled a screen pixel has not said anything
+        // new, and every point kept is a segment the simplifier and the renderer both pay
+        // for. The first point is pushed on pointer-down, so this is not where the stroke
+        // starts — it is where it is still moving.
+        this.pushStrokePoint(p.x, p.y)
+        return
+      }
       case 'move': {
         this.interaction.dx = p.x - this.moveOriginX
         this.interaction.dy = p.y - this.moveOriginY
@@ -377,24 +553,86 @@ export class CanvasController {
 
     switch (interaction.kind) {
       case 'draw': {
-        // A click rather than a drag makes no shape. Committing a zero-size shape would
-        // put something on the board the user cannot see, select or delete.
-        if (Math.abs(interaction.w) > 1 || Math.abs(interaction.h) > 1) {
-          const rect = normalize(interaction.x, interaction.y, interaction.w, interaction.h)
-          const id = nextId()
-          // The tool is read again here rather than captured when the drag began, so the
-          // shape made is the one the tool says now. A tool switched mid-drag is not
-          // possible through the toolbar, and guessing the other way would be wrong.
-          const draw = DRAWERS[this.activeTool]
-          if (draw) {
-            this.doc.transact(() => {
-              draw(this.doc, { id, rect })
-            }, LOCAL_ORIGIN)
-            this.refresh()
-            const i = this.store.indexOf(id)
-            if (i >= 0) this.select([i])
-          }
+        // A click rather than a drag makes a default-sized note, and nothing at all for the
+        // other two. Committing a zero-size rect would put something on the board the user
+        // cannot see, select or delete; a note with no click behaviour would be the one
+        // drawable tool in the set that cannot be made with a click, which is the opposite
+        // of how a note is used.
+        const min = MIN_DRAG_PX / this.viewport.zoom
+        const dragged = Math.abs(interaction.w) > min || Math.abs(interaction.h) > min
+        const isNote = this.activeTool === 'note'
+        if (!dragged && !isNote) break
+
+        const id = this.commitBox(
+          dragged
+            ? normalize(interaction.x, interaction.y, interaction.w, interaction.h)
+            : {
+                // A click anchors the note at the pointer. The size comes from the schema's
+                // default, referenced rather than copied, so "how big is a note" has one
+                // answer and the controller only knows where the user clicked.
+                x: interaction.originX,
+                y: interaction.originY,
+                w: DEFAULT_NOTE_RECT.w,
+                h: DEFAULT_NOTE_RECT.h,
+              },
+        )
+        if (isNote && id !== null) this.beginNoteEdit(id)
+        break
+      }
+      case 'line': {
+        const length = Math.hypot(
+          interaction.x - interaction.originX,
+          interaction.y - interaction.originY,
+        )
+        if (length <= MIN_DRAG_PX / this.viewport.zoom) break
+        const id = nextId()
+        this.doc.transact(() => {
+          createLineShape(this.doc, {
+            id,
+            x1: round(interaction.originX),
+            y1: round(interaction.originY),
+            x2: round(interaction.x),
+            y2: round(interaction.y),
+            // The Line tool draws a line. The arrowhead is a property of the same primitive
+            // per the design's rule, and the arrow tool is the same code path with this
+            // flag set — the shape type does not change.
+            head: false,
+          })
+        }, LOCAL_ORIGIN)
+        this.refresh()
+        const i = this.store.indexOf(id)
+        if (i >= 0) this.select([i])
+        break
+      }
+      case 'stroke': {
+        if (this.strokeCount === 0) break
+        // Simplified before it is stored, not after: the document should never hold a
+        // thousand points describing a straight line, and the tolerance is in the units the
+        // user was looking at, which is where the judgement about what is a straight line
+        // belongs.
+        const tolerance = STROKE_SIMPLIFY_PX / this.viewport.zoom
+        const points = simplifyStroke(this.strokeBuffer, this.strokeCount, tolerance)
+        if (points.length < 4) {
+          // A tap, not a stroke. A pen's one-point run is a dot, and duplicating the point is
+          // how it is written: a pen with a single point has no extent to draw, and the
+          // alternative - ignoring the tap - loses the one gesture a user makes when they
+          // want to place a point on a map.
+          //
+          // The bound is 4 rather than 2 because this is a flat array of coordinates, so one
+          // point is already two numbers. Testing `length < 2` here would never be true for
+          // a tap, and the stroke would be committed with a single point — which the
+          // renderer draws as nothing at all, leaving a shape on the board that cannot be
+          // seen, only selected.
+          if (points.length < 2) break
+          points.push(points[0] ?? 0, points[1] ?? 0)
         }
+        const id = nextId()
+        this.doc.transact(() => {
+          createPenShape(this.doc, { id, points })
+        }, LOCAL_ORIGIN)
+        this.refresh()
+        const i = this.store.indexOf(id)
+        if (i >= 0) this.select([i])
         break
       }
       case 'move': {
@@ -429,15 +667,78 @@ export class CanvasController {
     this.handle = -1
   }
 
+  /**
+   * Create the shape the current box tool describes, and select it.
+   *
+   * The tool is read again here rather than captured when the drag began, so the shape made
+   * is the one the tool says now. A tool switched mid-drag is not possible through the
+   * toolbar, and guessing the other way would be wrong.
+   *
+   * A switch with no default branch, over the three boxed tools. `TOOL_KIND` has already
+   * established that this tool is one of them, so the remaining question is which, and an
+   * exhaustive switch is what makes a fourth boxed tool a compile error here rather than a
+   * shape that is silently created as a rect.
+   */
+  private commitBox(rect: Rect): string | null {
+    const id = nextId()
+    this.doc.transact(() => {
+      switch (this.activeTool as 'rect' | 'ellipse' | 'note') {
+        case 'rect':
+          createRectShape(this.doc, { id, rect })
+          break
+        case 'ellipse':
+          createEllipseShape(this.doc, { id, rect })
+          break
+        case 'note':
+          createNoteShape(this.doc, { id, rect })
+          break
+      }
+    }, LOCAL_ORIGIN)
+    this.refresh()
+    const i = this.store.indexOf(id)
+    if (i >= 0) this.select([i])
+    return id
+  }
+
+  /**
+   * Append a point to the stroke buffer, growing it by doubling.
+   *
+   * Skips the sample when it is closer than a screen pixel to the previous one, which is
+   * what "coalesced" means here: a trackpad reports far more positions than a stroke has
+   * shape, and the ones that add nothing are the ones that make simplification do more work
+   * rather than less.
+   */
+  private pushStrokePoint(x: number, y: number): void {
+    const min = STROKE_SAMPLE_PX / this.viewport.zoom
+    if (this.strokeCount > 0) {
+      const last = (this.strokeCount - 1) * 2
+      const dx = x - (this.strokeBuffer[last] ?? 0)
+      const dy = y - (this.strokeBuffer[last + 1] ?? 0)
+      if (dx * dx + dy * dy < min * min) return
+    }
+    const needed = (this.strokeCount + 1) * 2
+    if (needed > this.strokeBuffer.length) {
+      // Doubling, not a fixed increment: a long stroke should not reallocate on every
+      // sample, and the buffer is never given back because the next stroke reuses it.
+      const grown = new Float32Array(this.strokeBuffer.length * 2)
+      grown.set(this.strokeBuffer)
+      this.strokeBuffer = grown
+    }
+    this.strokeBuffer[this.strokeCount * 2] = x
+    this.strokeBuffer[this.strokeCount * 2 + 1] = y
+    this.strokeCount++
+  }
+
   private commitMove(dx: number, dy: number): void {
     this.doc.transact(() => {
       for (const i of this.selected) {
         const map = this.shapeMapAt(i)
         if (!map) continue
-        const x = this.store.x(i) + dx
-        const y = this.store.y(i) + dy
-        map.set('x', round(x))
-        map.set('y', round(y))
+        // `translateShape`, not `set x` and `set y`: a line and a pen are described by their
+        // geometry, and writing their box would move a number nothing reads. The rounding
+        // lives there too, so a nudge of 1 and a drag of 1.005 both land on the same grid
+        // and a peer is not sent a difference it will round differently.
+        translateShape(map, round(dx), round(dy))
       }
     }, LOCAL_ORIGIN)
     this.refresh()
@@ -502,6 +803,13 @@ export class CanvasController {
       if (i >= 0) remapped.push(i)
     }
     this.select(remapped)
+    // A note that was being edited may have just been deleted, or undone away. Leaving the
+    // editor open over a shape that is no longer there means typing into nothing, and
+    // `setNoteText` would write to whatever took its place. `indexOf` answers this because
+    // the store excludes tombstones, which a lookup in the document's own map would not.
+    if (this.editingId !== null && this.store.indexOf(this.editingId) < 0) {
+      this.endNoteEdit()
+    }
   }
 
   private updateCursor(worldX: number, worldY: number): void {
@@ -535,9 +843,26 @@ export class CanvasController {
   /** Keyboard commands. Returns true when it handled the key. */
   key(key: string, shift: boolean): boolean {
     if (key === 'Escape') {
+      // Escape leaves the note before it leaves the selection. A user pressing Escape is
+      // asking to stop what they are doing, and if the editor is open the only thing they
+      // can be doing is typing.
+      if (this.editingId !== null) {
+        this.endNoteEdit()
+        return true
+      }
       this.interaction = { kind: 'idle' }
       this.select([])
       return true
+    }
+    if (key === 'Enter' && !shift && this.selected.length === 1) {
+      // Enter edits the selected note. The only way to reach a note's text without a mouse
+      // is the one keyboard path the app has, and a note that can only be typed into by
+      // clicking is a note that cannot be typed into at all for some users.
+      const i = this.selected[0] ?? -1
+      if (i >= 0 && this.store.shapeAt(i)?.type === 'note') {
+        this.beginNoteEdit(this.selectedIds[0] ?? '')
+        return true
+      }
     }
     if ((key === 'z' || key === 'Z') && !shift) {
       this.undoStep()
@@ -634,6 +959,93 @@ export function resizeRect(
 /** Two decimal places. Enough for a pixel, and it keeps concurrent writes from fighting. */
 function round(value: number): number {
   return Math.round(value * 100) / 100
+}
+
+/**
+ * Ramer-Douglas-Peucker, over a caller-owned buffer.
+ *
+ * The tolerance is in *world* units, and the caller derives it from a screen-pixel figure
+ * and the current zoom. That is the whole reason this lives here rather than in the shape
+ * store: 0.6px means something about what the user was looking at, and the zoom is the only
+ * thing that knows what a pixel was at the time.
+ *
+ * The tolerance is a distance, so it has to be compared against one. Perpendicular distance
+ * would need a division per point and buys nothing for a 0.6px budget; a stroke simplified
+ * at 0.6px looks identical either way, and this is the one place in the drawing path where
+ * a fraction of a pixel of slack is free.
+ *
+ * An explicit stack rather than recursion. A long stroke is thousands of points, and the
+ * recursive form's depth is bounded by the number of splits it makes — which is the number
+ * of points the tolerance is too coarse to remove. A scribble can produce a few thousand,
+ * and a few thousand frames of stack is a range error on a drawing tool.
+ *
+ * Returns a fresh array rather than compacting the buffer, because the buffer is reused by
+ * the next stroke and this result is about to be written into the document, where it is
+ * copied anyway.
+ */
+export function simplifyStroke(points: Float32Array, count: number, tolerance: number): number[] {
+  const n = Math.max(0, Math.floor(count))
+  if (n < 3) return Array.from(points.subarray(0, n * 2))
+
+  // `keep` marks a point by index, packed into a Uint8Array so the hot loop reads a byte
+  // rather than a Set. The first and last points always survive: a stroke that lost its
+  // endpoints would not start or stop where the user did.
+  const keep = new Uint8Array(n)
+  keep[0] = 1
+  keep[n - 1] = 1
+
+  const toleranceSquared = tolerance * tolerance
+  const stack: number[] = [0, n - 1]
+
+  while (stack.length > 0) {
+    const last = stack.pop() ?? 0
+    const first = stack.pop() ?? 0
+    if (last - first < 2) continue
+
+    const ax = points[first * 2] ?? 0
+    const ay = points[first * 2 + 1] ?? 0
+    const bx = points[last * 2] ?? 0
+    const by = points[last * 2 + 1] ?? 0
+    const dx = bx - ax
+    const dy = by - ay
+    const lengthSquared = dx * dx + dy * dy
+
+    let worst = -1
+    let worstDistance = toleranceSquared
+    for (let i = first + 1; i < last; i++) {
+      const px = points[i * 2] ?? 0
+      const py = points[i * 2 + 1] ?? 0
+      let distance: number
+      if (lengthSquared === 0) {
+        // A zero-length span is a dot, so the distance to it is the distance to the point.
+        // Dividing by zero here would give NaN, and `NaN > tolerance` is false, which would
+        // keep every point of a stroke the user drew in one spot.
+        distance = (px - ax) * (px - ax) + (py - ay) * (py - ay)
+      } else {
+        let t = ((px - ax) * dx + (py - ay) * dy) / lengthSquared
+        t = t < 0 ? 0 : t > 1 ? 1 : t
+        const ex = px - (ax + t * dx)
+        const ey = py - (ay + t * dy)
+        distance = ex * ex + ey * ey
+      }
+      if (distance > worstDistance) {
+        worstDistance = distance
+        worst = i
+      }
+    }
+
+    if (worst >= 0) {
+      keep[worst] = 1
+      stack.push(first, worst, worst, last)
+    }
+  }
+
+  const out: number[] = []
+  for (let i = 0; i < n; i++) {
+    if (keep[i] !== 1) continue
+    out.push(points[i * 2] ?? 0, points[i * 2 + 1] ?? 0)
+  }
+  return out
 }
 
 let idCounter = 0
