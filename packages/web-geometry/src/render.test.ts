@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { Doc } from 'yjs'
-import { createEllipseShape, createRectShape, createViewport, toTransform } from '@mesob/schema'
+import { Doc, Map as YMap } from 'yjs'
+import { first } from '@mesob/schema'
+import {
+  createEllipseShape,
+  createLineShape,
+  createNoteShape,
+  createPenShape,
+  createRectShape,
+  createViewport,
+  shapesMap,
+  toTransform,
+} from '@mesob/schema'
 import { ShapeStore } from './shape-store.js'
 import {
   BoardRenderer,
@@ -26,6 +36,10 @@ import {
  * and the handle paint. Merged into one list, "the first rect drawn" is the background and
  * every assertion about a shape silently reads the wrong numbers.
  */
+
+/** Pixels per character in `Recorder.measureText`. Fixed, so wrapping is predictable. */
+const MEASURED_ADVANCE = 7
+
 class Recorder implements RenderContext {
   fills = 0
   strokes = 0
@@ -50,6 +64,16 @@ class Recorder implements RenderContext {
   }[] = []
   /** Solid rects. The background wipe and the handles. */
   fillRects: [number, number, number, number][] = []
+  /**
+   * Every `moveTo`/`lineTo`, with the current transform applied.
+   *
+   * Line segments, pen polylines and arrowhead arms are all built from these, and they are
+   * the only way to assert where a stroke actually lands. Counting them instead would pass
+   * for a polyline that connected the points in the wrong order.
+   */
+  segments: { to: 'move' | 'line'; x: number; y: number }[] = []
+  /** Every `fillText`, with the font in force at the time. */
+  texts: { text: string; x: number; y: number; font: string }[] = []
   backgroundWrites = 0
   private depth = 0
   maxDepth = 0
@@ -60,6 +84,16 @@ class Recorder implements RenderContext {
   private _fillStyle = ''
   private _strokeStyle = ''
   private _lineWidth = 1
+  private _font = ''
+  textAlign = 'start'
+  textBaseline = 'alphabetic'
+
+  get font(): string {
+    return this._font
+  }
+  set font(value: string) {
+    this._font = value
+  }
 
   get fillStyle(): string {
     return this._fillStyle
@@ -131,14 +165,28 @@ class Recorder implements RenderContext {
       box: [x + this.tx - radiusX, y + this.ty - radiusY, radiusX * 2, radiusY * 2],
     })
   }
-  moveTo(): void {
+  moveTo(x: number, y: number): void {
     this.paths++
+    // Recorded with the current transform applied, for the same reason `rect` is: a line's
+    // endpoints are passed relative to the shape's centre, and an assertion about where
+    // they land on screen would pass for the wrong reason without it.
+    this.segments.push({ to: 'move', x: x + this.tx, y: y + this.ty })
   }
-  lineTo(): void {
+  lineTo(x: number, y: number): void {
     this.paths++
+    this.segments.push({ to: 'line', x: x + this.tx, y: y + this.ty })
   }
   closePath(): void {
     this.paths++
+  }
+  fillText(text: string, x: number, y: number): void {
+    this.texts.push({ text, x: x + this.tx, y: y + this.ty, font: this._font })
+  }
+  measureText(text: string): { width: number } {
+    // A fixed advance per character. Not what a browser does — it is what a test can
+    // predict, which is the point: wrapping is a function of measured width, so the width
+    // has to be one a test can reason about rather than one that depends on installed fonts.
+    return { width: text.length * MEASURED_ADVANCE }
   }
   fill(): void {
     this.fills++
@@ -605,5 +653,276 @@ describe('overlay', () => {
     expect(rect?.[1]).toBeCloseTo((70 - 0) * 1 + 300)
     expect(rect?.[2]).toBeCloseTo(50)
     expect(rect?.[3]).toBeCloseTo(30)
+  })
+})
+
+/**
+ * The three types added after Phase 1's first cut.
+ *
+ * The assertions are about coordinates, not counts. A renderer that emitted the right number
+ * of path commands in the wrong place would pass every count-based test in this file, and a
+ * stroke that lands 300px from the pointer is a stroke the user cannot see and cannot click.
+ */
+describe('line, pen and note rendering', () => {
+  const drawOne = (build: (doc: Doc, id: string) => void, t = transform()) => {
+    const doc = new Doc()
+    build(doc, 's')
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, t, style)
+    return ctx
+  }
+
+  it('draws a line between its endpoints, in screen coordinates', () => {
+    // The transform puts the world origin at the centre of the canvas, so a line from
+    // (0,0) to (100,0) runs from the middle to 100px right of it.
+    const ctx = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 0, y1: 0, x2: 100, y2: 0 })
+    })
+    expect(ctx.segments).toEqual([
+      { to: 'move', x: 400, y: 300 },
+      { to: 'line', x: 500, y: 300 },
+    ])
+    expect(ctx.strokes).toBe(1)
+  })
+
+  it('scales a line by the zoom, about the camera', () => {
+    const t = transform({ cameraX: 50, cameraY: 50, zoom: 2 })
+    const ctx = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 50, y1: 50, x2: 150, y2: 50 })
+    }, t)
+    expect(ctx.segments).toEqual([
+      { to: 'move', x: 400, y: 300 },
+      { to: 'line', x: 600, y: 300 },
+    ])
+  })
+
+  it('fills nothing for a line, because its fill is transparent', () => {
+    // The stroke-only default is what stops a line arriving as a white slab. If a fill were
+    // emitted here it would be `transparent`, and `fill()` on a transparent colour is a
+    // wasted path plus a fillStyle write on a 5000-shape board.
+    const ctx = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 0, y1: 0, x2: 10, y2: 0 })
+    })
+    expect(ctx.fills).toBe(0)
+  })
+
+  it('draws no arrowhead when head is false, and two arms when it is true', () => {
+    const plain = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 0, y1: 0, x2: 100, y2: 0 })
+    })
+    // A move and a line: the shaft, and nothing else.
+    expect(plain.segments).toHaveLength(2)
+
+    const headed = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 0, y1: 0, x2: 100, y2: 0, head: true })
+    })
+    // Two more moves and two more lines: the head, as its own two sub-paths. One move per
+    // arm rather than a single path from arm to arm, because a path from one arm to the
+    // other would draw a line across the arrowhead's hollow.
+    expect(headed.segments).toHaveLength(6)
+    expect(headed.segments.filter((s) => s.to === 'move')).toHaveLength(3)
+  })
+
+  it('points the head back along the line, whichever way the line was drawn', () => {
+    // The arms sit behind the tip. A line drawn right-to-left must reverse, or a user
+    // dragging in the other direction gets an arrowhead pointing away from their line —
+    // which looks like a decoration on the wrong end rather than a bug.
+    const forward = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 0, y1: 0, x2: 100, y2: 0, head: true })
+    })
+    const backward = drawOne((doc, id) => {
+      createLineShape(doc, { id, x1: 100, y1: 0, x2: 0, y2: 0, head: true })
+    })
+    // Each arm's x is behind its own tip: left of it going right, right of it going left.
+    const forwardTip = forward.segments[2]?.x ?? 0
+    expect(forward.segments[3]?.x ?? 0).toBeLessThan(forwardTip)
+    const backwardTip = backward.segments[2]?.x ?? 0
+    expect(backward.segments[3]?.x ?? 0).toBeGreaterThan(backwardTip)
+    // The two heads are mirror images about the shared tip, not the same shape drawn twice.
+    expect(forwardTip - (forward.segments[3]?.x ?? 0)).toBeCloseTo(
+      (backward.segments[3]?.x ?? 0) - backwardTip,
+    )
+  })
+
+  it('draws a pen as one polyline, connecting the points in order', () => {
+    const ctx = drawOne((doc, id) => {
+      createPenShape(doc, { id, points: [0, 0, 50, 50, 100, 0] })
+    })
+    expect(ctx.segments).toEqual([
+      { to: 'move', x: 400, y: 300 },
+      { to: 'line', x: 450, y: 350 },
+      { to: 'line', x: 500, y: 300 },
+    ])
+    // One stroke for the whole run. A `stroke()` per segment is the same pixels and a
+    // per-segment cost, and at 5000 shapes it is the difference between one path and five
+    // thousand.
+    expect(ctx.strokes).toBe(1)
+  })
+
+  it('draws no line at all for a pen with fewer than two points', () => {
+    // An empty run, and a run of one point from a peer older than the dot-duplicating
+    // commit. Neither may produce a `lineTo`: with no second point there is nowhere to draw
+    // to, and a stroke whose second coordinate defaulted to the origin would draw a line
+    // from the user's tap to the top-left corner of the board.
+    const empty = drawOne((doc, id) => {
+      createPenShape(doc, { id, points: [] })
+    })
+    expect(empty.segments).toHaveLength(0)
+
+    const single = drawOne((doc, id) => {
+      createPenShape(doc, { id, points: [10, 10] })
+    })
+    expect(single.segments.filter((s) => s.to === 'line')).toHaveLength(0)
+  })
+
+  it('fills and strokes a note, so it is a paper shape and not a line', () => {
+    const ctx = drawOne((doc, id) => {
+      createNoteShape(doc, { id, rect: { x: -50, y: -25, w: 100, h: 50 } })
+    })
+    expect(ctx.fills).toBe(1)
+    expect(ctx.strokes).toBe(1)
+    const rect = ctx.rects[0]
+    expect(rect?.[0]).toBeCloseTo(350)
+    expect(rect?.[1]).toBeCloseTo(275)
+    expect(rect?.[2]).toBeCloseTo(100)
+  })
+
+  it('writes no text for an empty note, rather than an empty string', () => {
+    // A `fillText('')` is a glyph run that measures, wraps and draws nothing. On a board of
+    // empty notes it is the entire cost of the note.
+    const ctx = drawOne((doc, id) => {
+      createNoteShape(doc, { id, rect: { x: 0, y: 0, w: 100, h: 50 } })
+    })
+    expect(ctx.texts).toHaveLength(0)
+  })
+
+  it('writes the note text at the note origin plus the padding', () => {
+    const doc = new Doc()
+    createNoteShape(doc, { id: 's', rect: { x: 0, y: 0, w: 200, h: 100 } })
+    shapesMap(doc).get('s')?.set('text', 'Hello')
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.texts).toHaveLength(1)
+    expect(ctx.texts[0]?.text).toBe('Hello')
+    // One padding in from the note's own left and top edges, and `textBaseline: top`, so
+    // the y is the top of the line rather than a baseline. The note sits at the world
+    // origin, which is the middle of the canvas, so its top-left corner is that plus half
+    // its size subtracted: 400+8 across, 300+8 down. That is the same origin the DOM
+    // textarea over the note uses for its first line with the same padding, and it is why
+    // this is asserted rather than left to look right — a caret a line height away from the
+    // glyphs is an editor nobody can read what they are typing over.
+    expect(ctx.texts[0]?.x).toBe(400 + 8)
+    expect(ctx.texts[0]?.y).toBe(300 + 8)
+    expect(ctx.texts[0]?.font).toContain('14px')
+  })
+
+  it('steps each line by 1.4em, so the canvas text and the editor agree', () => {
+    // The line height is the other half of that agreement, and it is the one a reader of
+    // the note would notice first: a note whose second line is not below its first looks
+    // broken, and the textarea over it would disagree with what was drawn.
+    const doc = new Doc()
+    createNoteShape(doc, { id: 's', rect: { x: 0, y: 0, w: 200, h: 100 } })
+    shapesMap(doc).get('s')?.set('text', 'aaa bbb ccc ddd eee fff ggg hhh')
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.texts.length).toBeGreaterThan(1)
+    const first = ctx.texts[0]
+    const second = ctx.texts[1]
+    expect(second).toBeDefined()
+    expect((second?.y ?? 0) - (first?.y ?? 0)).toBeCloseTo(14 * 1.4)
+  })
+
+  it('hard-breaks on a newline rather than joining the paragraphs', () => {
+    const doc = new Doc()
+    createNoteShape(doc, { id: 's', rect: { x: 0, y: 0, w: 400, h: 200 } })
+    shapesMap(doc).get('s')?.set('text', 'first\nsecond')
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    // Two lines, not one line reading "first second": a note that ran its paragraphs
+    // together would be unreadable for anything longer than a sentence, and the newline is
+    // the only structure a plain-text note has.
+    expect(ctx.texts.map((t) => t.text)).toEqual(['first', 'second'])
+  })
+
+  it('scales the note font with the zoom, so a zoomed note is not tiny text in a big note', () => {
+    const doc = new Doc()
+    createNoteShape(doc, { id: 's', rect: { x: 0, y: 0, w: 200, h: 100 } })
+    shapesMap(doc).get('s')?.set('text', 'Hello')
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform({ zoom: 3 }), style)
+    expect(ctx.texts[0]?.font).toContain('42px')
+  })
+
+  it('wraps long note text onto several lines instead of drawing it past the note', () => {
+    const d = new Doc()
+    createNoteShape(d, { id: 's', rect: { x: 0, y: 0, w: 100, h: 100 } })
+    shapesMap(d).get('s')?.set('text', 'word '.repeat(40))
+    const store = new ShapeStore()
+    store.refill(d)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.texts.length).toBeGreaterThan(1)
+    // No line may start further right than the note's own right edge: wrapping is what stops
+    // text running off the paper, and a test that only counted lines would pass while every
+    // line overflowed.
+    for (const line of ctx.texts) {
+      expect(line.x).toBeLessThanOrEqual(400 + 100 - 8 + 0.001)
+    }
+  })
+
+  it('breaks a word too long for the note rather than looping or dropping it', () => {
+    // A URL pasted into a narrow note. The long-word path has to make progress on a single
+    // character at a time, and a `while` that assumes it can always fit a character would
+    // never terminate on a note narrower than one glyph.
+    const d = new Doc()
+    createNoteShape(d, { id: 's', rect: { x: 0, y: 0, w: 20, h: 100 } })
+    shapesMap(d).get('s')?.set('text', 'x'.repeat(200))
+    const store = new ShapeStore()
+    store.refill(d)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    expect(ctx.texts.length).toBeGreaterThan(0)
+  })
+
+  it('stops drawing text at the bottom of the note', () => {
+    // Overflow is clipped rather than drawn: text past the bottom edge is text on the board
+    // that belongs to no shape, and it survives every later move of the note.
+    const d = new Doc()
+    createNoteShape(d, { id: 's', rect: { x: 0, y: 0, w: 100, h: 20 } })
+    shapesMap(d).get('s')?.set('text', 'word '.repeat(80))
+    const store = new ShapeStore()
+    store.refill(d)
+    const ctx = new Recorder()
+    new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    for (const line of ctx.texts) {
+      expect(line.y).toBeLessThanOrEqual(300 + 20)
+    }
+  })
+
+  it('skips a shape whose type it does not know, rather than throwing', () => {
+    // A shape from a newer build. The board has to keep drawing: one unknown type taking
+    // down `drawBoard` is a blank board for everyone on it.
+    const doc = new Doc()
+    const map = new YMap()
+    map.set('id', 's')
+    map.set('type', 'video')
+    map.set('z', first())
+    shapesMap(doc).set('s', map)
+    const store = new ShapeStore()
+    store.refill(doc)
+    const ctx = new Recorder()
+    expect(() => {
+      new BoardRenderer(store).drawBoard(ctx, transform(), style)
+    }).not.toThrow()
   })
 })
