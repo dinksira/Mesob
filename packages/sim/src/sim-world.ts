@@ -17,11 +17,14 @@ import { applyUpdate, encodeStateAsUpdate, encodeStateVector, Doc } from 'yjs'
 import {
   after,
   createEllipseShape,
+  createLineShape,
+  createNoteShape,
+  createPenShape,
   createRectShape,
   first,
   shapesMap,
+  translateShape,
   type BoxedShape,
-  type CreateShapeParams,
   type Key,
   type Shape,
   type ShapeMap,
@@ -36,8 +39,14 @@ import { BaseTransport, type Transport } from './transport.js'
  * `add` carries the type rather than each shape type getting its own op kind. An op kind
  * per type would multiply the cases here and in the op generator for a difference that is
  * one argument, and the field is what the generator wants to be able to vary anyway.
+ *
+ * `add` is a union of three, discriminated by `type`, and the flat `x`/`y`/`w`/`h` are
+ * present on all of them. The box is redundant for a line and a pen, and keeping it means
+ * the `move` op can target any shape with one field set — which is what makes a fuzzer run
+ * that reaches all five types without a second op kind. The generator fills it with the
+ * shape's own bounds rather than leaving it a lie, and nothing reads it for those two types.
  */
-export type Op =
+export type AddOp =
   | {
       kind: 'add'
       id: string
@@ -47,6 +56,33 @@ export type Op =
       w: number
       h: number
     }
+  | {
+      kind: 'add'
+      id: string
+      type: 'line'
+      x: number
+      y: number
+      w: number
+      h: number
+      x1: number
+      y1: number
+      x2: number
+      y2: number
+      head: boolean
+    }
+  | {
+      kind: 'add'
+      id: string
+      type: 'pen'
+      x: number
+      y: number
+      w: number
+      h: number
+      points: number[]
+    }
+
+export type Op =
+  | AddOp
   | { kind: 'move'; id: string; x: number; y: number }
   | { kind: 'set'; id: string; property: 'fill' | 'stroke' | 'strokeWidth'; value: string | number }
   | { kind: 'delete'; id: string }
@@ -59,16 +95,34 @@ export interface Replica {
 const SETTABLE_PROPERTIES = ['fill', 'stroke', 'strokeWidth'] as const
 
 /**
- * The creator for each type the sim can add.
+ * The creator for each type the sim can add, with the geometry its op carries.
  *
- * `BoxedShape` is the constraint, not a detail: the sim's `add` op carries a box, so it
- * can only generate types described by one. A type outside that set needs an op that
- * describes its geometry, which is the same reason the controller's draw tools are a
- * table of boxed creators.
+ * A function per type rather than a table keyed to one signature, for the reason the
+ * controller's is a `Record` of kinds instead of a table of creators: the types do not share
+ * a parameter shape. The switch inside is exhaustive, so a type added to the schema has to be
+ * decided here rather than falling through and being created as something else.
  */
-const CREATORS: Record<BoxedShape['type'], (doc: Doc, params: CreateShapeParams) => ShapeMap> = {
-  rect: createRectShape,
-  ellipse: createEllipseShape,
+function createFromOp(doc: Doc, op: AddOp, z: Key): ShapeMap {
+  switch (op.type) {
+    case 'rect':
+      return createRectShape(doc, { id: op.id, z, rect: { x: op.x, y: op.y, w: op.w, h: op.h } })
+    case 'ellipse':
+      return createEllipseShape(doc, { id: op.id, z, rect: { x: op.x, y: op.y, w: op.w, h: op.h } })
+    case 'note':
+      return createNoteShape(doc, { id: op.id, z, rect: { x: op.x, y: op.y, w: op.w, h: op.h } })
+    case 'line':
+      return createLineShape(doc, {
+        id: op.id,
+        z,
+        x1: op.x1,
+        y1: op.y1,
+        x2: op.x2,
+        y2: op.y2,
+        head: op.head,
+      })
+    case 'pen':
+      return createPenShape(doc, { id: op.id, z, points: op.points })
+  }
 }
 
 export interface SimWorldOptions {
@@ -140,18 +194,19 @@ export class SimWorld {
       replica.doc.transact(() => {
         switch (op.kind) {
           case 'add':
-            CREATORS[op.type](replica.doc, {
-              id: op.id,
-              z: this.topZ,
-              rect: { x: op.x, y: op.y, w: op.w, h: op.h },
-            })
+            createFromOp(replica.doc, op, this.topZ)
             this.topZ = after(this.topZ)
             break
           case 'move': {
             const shape = shapesMap(replica.doc).get(op.id)
+            // A delta, not an absolute position. An absolute `set x` would be a different op
+            // per type — a line's position is its endpoints — and the fuzz would then be
+            // unable to move two shapes the same way, which is the case a convergence bug
+            // hides in.
             if (shape) {
-              shape.set('x', op.x)
-              shape.set('y', op.y)
+              const x = typeof shape.get('x') === 'number' ? (shape.get('x') as number) : 0
+              const y = typeof shape.get('y') === 'number' ? (shape.get('y') as number) : 0
+              translateShape(shape, op.x - x, op.y - y)
             }
             break
           }
@@ -183,20 +238,72 @@ export class SimWorld {
     return id
   }
 
+  /**
+   * A random shape of a random type, with geometry that type can actually have.
+   *
+   * The point of generating all five is that a convergence bug in the new types is found by
+   * the fuzzer rather than by reading. Three of them need geometry their box does not carry,
+   * so a generator that only varied the type would produce lines with no endpoints and pens
+   * with no points — shapes that are legal to create and useless to test, because every
+   * subsequent move and render would skip them.
+   */
+  private generateAdd(id: string): AddOp {
+    const x = Math.floor(this.random() * 2000)
+    const y = Math.floor(this.random() * 2000)
+    const w = 10 + Math.floor(this.random() * 200)
+    const h = 10 + Math.floor(this.random() * 200)
+    const roll = this.random()
+
+    if (roll < 0.3) return { kind: 'add', id, type: 'rect', x, y, w, h }
+    if (roll < 0.6) return { kind: 'add', id, type: 'ellipse', x, y, w, h }
+    if (roll < 0.75) return { kind: 'add', id, type: 'note', x, y, w, h }
+    if (roll < 0.9) {
+      // Endpoints at the corners of the box, so the derived box is the one the op carries
+      // and a reader can check that the two agree. Both orderings, because a segment drawn
+      // bottom-up is a different pair of writes from one drawn top-down.
+      const flip = this.random() < 0.5
+      return {
+        kind: 'add',
+        id,
+        type: 'line',
+        x,
+        y,
+        w,
+        h,
+        x1: flip ? x : x + w,
+        y1: flip ? y : y + h,
+        x2: flip ? x + w : x,
+        y2: flip ? y + h : y,
+        // Both values, so the arrowhead flag is exercised on a replica that has to carry it.
+        head: this.random() < 0.5,
+      }
+    }
+    // A short random run rather than a rectangle's four corners, so the points are not
+    // collinear: a collinear run simplifies to its endpoints under any tolerance, and a pen
+    // whose points never survive simplification is a pen that never tests `readPen` on
+    // anything but a straight line.
+    const count = 2 + Math.floor(this.random() * 5)
+    const points: number[] = []
+    for (let i = 0; i < count; i++) {
+      points.push(x + Math.floor(this.random() * w), y + Math.floor(this.random() * h))
+    }
+    return { kind: 'add', id, type: 'pen', x, y, w, h, points }
+  }
+
   /** Round-robin rather than random, so every property gets corrupted eventually. */
   private pickProperty(): 'fill' | 'stroke' | 'strokeWidth' {
     const property = SETTABLE_PROPERTIES[this.nextProp++ % SETTABLE_PROPERTIES.length]
     if (property === undefined) throw new Error('pickProperty found no properties')
     return property
   }
-
   /**
    * Generate and apply `count` random ops.
    *
    * Op selection is biased toward `add` early so that later `move`/`set`/`delete` have
    * something to act on; a uniform distribution spends most of its budget deleting a
    * board that never had any shapes.
-   */ runOps(count: number): Op[] {
+   */
+  runOps(count: number): Op[] {
     const applied: Op[] = []
     const ids: string[] = []
 
@@ -206,15 +313,7 @@ export class SimWorld {
 
       if (ids.length === 0 || roll < 0.35) {
         const id = `shp_${String(this.nextId++)}`
-        op = {
-          kind: 'add',
-          id,
-          type: this.random() < 0.5 ? 'rect' : 'ellipse',
-          x: Math.floor(this.random() * 2000),
-          y: Math.floor(this.random() * 2000),
-          w: 10 + Math.floor(this.random() * 200),
-          h: 10 + Math.floor(this.random() * 200),
-        }
+        op = this.generateAdd(id)
         ids.push(id)
       } else {
         const id = this.pickId(ids)

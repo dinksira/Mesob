@@ -2,13 +2,22 @@ export { after, before, between, first } from './fractional-index.js'
 export type { Key } from './fractional-index.js'
 
 export {
+  DEFAULT_NOTE_RECT,
   DEFAULT_STYLE,
+  HIT_TOLERANCE,
   SHAPES_KEY,
   SHAPE_TYPES,
   boundsFor,
+  boundsOfPoints,
   createEllipseShape,
+  createLineShape,
+  createNoteShape,
+  createPenShape,
   createRectShape,
   deleteShape,
+  translateShape,
+  distanceToPolyline,
+  distanceToSegment,
   hitTest,
   isBoxedShape,
   readBoard,
@@ -17,8 +26,13 @@ export {
 } from './shapes.js'
 export type {
   BoxedShape,
+  CreateLineParams,
+  CreatePenParams,
   CreateShapeParams,
   EllipseShape,
+  LineShape,
+  NoteShape,
+  PenShape,
   Point,
   Rect,
   RectShape,

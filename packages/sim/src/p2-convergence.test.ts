@@ -68,18 +68,25 @@ describe('ellipses converge like rects do', () => {
     world.destroy()
   })
 
-  it('produces a mix of both types from the random generator, and they converge', () => {
+  it('produces every type from the random generator, and they converge', () => {
     // The complement of the test above: the generator is not biased so hard toward one type
-    // that the other is only ever covered by the hand-written ops.
+    // that any of the others is only ever covered by the hand-written ops.
     const world = new SimWorld({
       replicas: 3,
       transport: new DuplicatingTransport(makeRandom(7)),
       seed: 7,
     })
-    const ops = world.runOps(OP_COUNT)
+    // 200 rather than the usual 40, because this test is asserting on the generator's
+    // distribution and not on a particular run: at 40 ops a type with a 15% share is missed
+    // most of the time, and a test that fails for that reason is a test about the seed. The
+    // extra ops cost nothing — the run is milliseconds and nothing here is a wall clock.
+    const ops = world.runOps(200)
     const added = ops.filter((op) => op.kind === 'add')
     const types = new Set(added.map((op) => op.type))
-    expect(types).toEqual(new Set(['rect', 'ellipse']))
+    // Every type, not "more than one". A generator that produced only rects and ellipses
+    // would pass a test that asked for a mix, and would leave the three types whose geometry
+    // is not a box converging entirely untested.
+    expect(types).toEqual(new Set(['rect', 'ellipse', 'line', 'pen', 'note']))
 
     world.syncAll()
     expect(converged(world)).toBe(true)
