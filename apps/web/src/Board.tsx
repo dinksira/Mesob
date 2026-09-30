@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -9,6 +10,7 @@ import {
 import type { Doc } from 'yjs'
 import { ShapeStore } from '@mesob/web-geometry'
 import { CanvasController } from './canvas-controller.js'
+import { NoteEditor } from './NoteEditor.js'
 import { boardState, useBoardStore } from './store.js'
 
 /**
@@ -73,9 +75,13 @@ export function Board({
         state.setShapeCount(count)
         reportHistory()
       },
+      onNoteEditChange: (id) => {
+        state.setNoteEditId(id)
+      },
     })
     handle.controller = controller
     controllerRef.current = controller
+    setController(controller)
     controller.setTool(state.tool)
     controller.start()
     readyRef.current(controller)
@@ -120,6 +126,13 @@ export function Board({
   useEffect(() => {
     controllerRef.current?.setTool(tool)
   }, [tool])
+
+  // The note editor. The id is a subscription because the controller opens and closes the
+  // session from inside pointer handlers; the controller is state rather than a ref because
+  // it has to reach the rendered editor, and a ref read during render would be reading
+  // something React cannot see change.
+  const noteEditId = useBoardStore((s) => s.noteEditId)
+  const [controller, setController] = useState<CanvasController | null>(null)
 
   const point = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -192,6 +205,9 @@ export function Board({
         aria-label="Board canvas. Arrow keys move the selection, Delete removes it, Z undoes."
         onKeyDown={onKeyDown}
       />
+      {controller !== null && noteEditId !== null ? (
+        <NoteEditor controller={controller} noteId={noteEditId} />
+      ) : null}
     </div>
   )
 }

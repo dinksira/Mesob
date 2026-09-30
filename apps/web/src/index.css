@@ -5,6 +5,10 @@
   --charcoal: #2a2622;
   --indigo-overlay: #5b3a52;
 
+  /* The chrome material, not a brand colour: the floating toolbar needs a surface lighter
+     than the substrate it floats over, or a cream pill on a cream board has no edge. */
+  --chrome-surface: #ffffff;
+
   color-scheme: light;
   background: var(--substrate);
   color: var(--charcoal);
@@ -83,16 +87,160 @@ body,
   outline-offset: -2px;
 }
 
-.toolbar {
-  width: 44px;
-  flex: 0 0 44px;
+/* The note editor sits above all three layers, because it has to take the clicks that would
+   otherwise reach the board. `pointer-events: auto` is the default and is stated here so the
+   reason the other two layers are inert is visible in one place: everything between the
+   board and the user's own text is transparent on purpose.
+
+   The note's own fill is drawn on the board canvas underneath, so the field draws no
+   background of its own. It would otherwise be text on two backgrounds, and the fill would
+   stop reading as a property of the note. */
+.note-editor {
+  position: absolute;
+  z-index: 3;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  outline: 2px solid var(--indigo-overlay);
+  outline-offset: 0;
+  background-color: transparent;
+  color: #2a2622;
+  font-family: 'Noto Sans Ethiopic', 'Abyssinica SIL', system-ui, sans-serif;
+  /* Overridden per-instance from the zoom; these are the zoom-1 values the canvas renderer
+     also uses, and they are here so the field has a size before its first measure. */
+  font-size: 14px;
+  line-height: 1.4;
+  resize: none;
+}
+
+.note-editor:focus-visible {
+  outline: 2px solid var(--indigo-overlay);
+}
+
+/* The dock is a bottom-edge hotspot, not a bar. Its whole height is a hover target, because
+   the whole point of a hover-revealed toolbar is that nobody should have to aim. 64px of
+   the bottom edge is a large miss, and the pointer is already travelling through that band
+   on its way to the status readout.
+
+   `pointer-events: none` on the dock is what keeps the pill and the handle reachable without
+   the dock itself ever eating a click meant for the canvas; the two children opt back in,
+   and `:hover` still matches through a transparent parent. */
+.toolbar-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 64px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-bottom: 12px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* The band the pointer actually lands in. */
+.toolbar-dock-strip {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+
+/* The affordance, and the reason this is findable at all.
+   A hover-revealed toolbar with nothing to aim at is undiscoverable rather than tidy, and
+   "the tools are down there somewhere" is the failure this document's own objection to the
+   pill predicted. So a grip is parked at the bottom edge permanently. It is the visible
+   answer to "where are my shapes", it is a hover target in its own right, and it is
+   `aria-hidden` because it controls nothing: the real controls are the pill above it. */
+.toolbar-handle {
+  position: relative;
+  width: 44px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 999px;
+  background: rgb(42 38 34 / 22%);
+  box-shadow: 0 1px 2px rgb(42 38 34 / 8%);
+  pointer-events: auto;
+  transition:
+    background 140ms linear,
+    width 180ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.toolbar-dock:hover .toolbar-handle,
+.toolbar:focus-within + .toolbar-handle,
+.toolbar-handle:hover {
+  width: 56px;
+  background: rgb(42 38 34 / 38%);
+}
+
+/* The pill floats over the board rather than reserving a lane beside it, so the infinite
+   surface now reaches the left edge. `chrome-surface` is not one of the four brand tokens:
+   it is the material the chrome is made of, and it has to be lighter than the substrate or
+   a cream pill on a cream canvas has no edge. */
+.toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   gap: 4px;
-  padding: 8px 0;
-  background: var(--substrate);
-  border-right: 1px solid rgb(42 38 34 / 12%);
+  padding: 6px;
+  background: var(--chrome-surface);
+  border: 1px solid rgb(42 38 34 / 10%);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px rgb(42 38 34 / 6%),
+    0 6px 20px rgb(42 38 34 / 10%);
+
+  /* Collapsed in place, not slid off the bottom edge.
+
+     Two failed approaches, both worth recording:
+
+     `display: none` and `visibility: hidden` are the obvious ways to hide this, and both take
+     the buttons out of the tab order with them. The pill then cannot be reached by keyboard at
+     all, `:focus-within` can never fire, and the reveal becomes pointer-only — which is
+     precisely the regression `:focus-within` was added to prevent.
+
+     Sliding it below the viewport instead keeps it focusable but is worse in a different way:
+     a focused element inside an `overflow: hidden` container gets scrolled into view by the
+     browser, so the first Tab would drag the whole board out of alignment.
+
+     So it stays where it is, invisible and inert. `opacity: 0` keeps it in the tab order and
+     `pointer-events: none` stops it silently eating clicks while nobody can see it. The moment
+     focus lands inside, `:focus-within` brings it back before the user can perceive the gap. */
+  transform: translateY(6px) scale(0.96);
+  transform-origin: bottom center;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 180ms cubic-bezier(0.2, 0, 0.2, 1),
+    opacity 140ms linear;
+}
+
+/* Hover reveals it, and so does the keyboard. `focus-within` is not optional: a toolbar
+   that only a mouse can summon is a toolbar the keyboard cannot use, and every reason this
+   document gave for keeping the old always-visible column applies more strongly to the
+   thing that replaced it. */
+.toolbar-dock:hover .toolbar,
+.toolbar:focus-within {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  transition:
+    transform 180ms cubic-bezier(0.2, 0, 0.2, 1),
+    opacity 140ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolbar,
+  .toolbar-handle {
+    transition: opacity 1ms linear;
+  }
+
+  .toolbar-dock:hover .toolbar,
+  .toolbar:focus-within {
+    transition: opacity 1ms linear;
+  }
 }
 
 .tool {
@@ -105,7 +253,7 @@ body,
   color: var(--charcoal);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 9px;
   cursor: pointer;
 }
 
@@ -129,10 +277,12 @@ body,
   outline-offset: 1px;
 }
 
+/* Vertical, because the pill is a row: the separator divides the tools from the history
+   pair along the axis they are actually stacked on. */
 .toolbar-separator {
-  width: 24px;
-  height: 1px;
-  margin: 4px 0;
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
   background: rgb(42 38 34 / 16%);
 }
 
@@ -177,7 +327,9 @@ body,
 .status {
   position: absolute;
   left: 16px;
-  bottom: 12px;
+  /* Clear of the dock's 12px hotspot, so the readout is never sitting under the strip that
+     reveals the toolbar. */
+  bottom: 20px;
   margin: 0;
   font-size: 12px;
   color: var(--charcoal);

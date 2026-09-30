@@ -40,10 +40,24 @@ IndexedDB persistence · 5,000 shapes at 60fps with a zero-allocation draw loop.
 | Version timeline, restore | Restore depends on a persisted log ([ADR-0003](./adr/0003-restore-is-a-forward-update.md)) | G5 |
 | Document blocks | Tiptap mount is Phase 3; 50 live ProseMirror instances is a cliff | G3 |
 | Merge-summary toast | Needs a server to count remote changes against | G2 |
+| Anchored `arrow` connectors | Shape-anchor snapping and orphan-on-target-delete need a ref-bearing shape type | G2 |
+| Separate `text` tool | A second text-bearing primitive over the same note storage, with nothing to distinguish it yet | G3 |
 
-**No `line` primitive.** A line is an `arrow` with no arrowhead, and the doc's primitive supports
-that as a property toggle. Adding a second connector type is a new shape, a new factory, a new fuzz
-case, and no new user capability.
+**One connector primitive, not two.** The original wording of this constraint was "no `line`
+primitive: a line is an `arrow` with no arrowhead". That is honoured, with one naming change that
+needs recording rather than hiding.
+
+The shipped primitive is `line`, carrying `x1/y1/x2/y2` and an optional `head` flag. Still one
+type, one factory, one fuzz case, no new user capability — which was the whole point of the
+constraint. What changed is the name: the toolbar's tool is *Line*, the doc has no anchor
+snapping, and calling the stored type `arrow` would make the schema, the renderer and the button
+the user presses all disagree about what they are. A type named for a capability that is not
+implemented (`arrow` implying shape-anchored connectors) is worse than a type named for what the
+tool does.
+
+The consequence to keep in mind: if anchored connectors arrive in Phase 2 as a *different*
+behaviour — snapping to shape edges, tracking their target, orphaning rather than deleting — that
+is a new type with `srcId`/`targetId` refs, not a flag on this one. The flag stays.
 
 ## Design constraints
 
@@ -86,18 +100,20 @@ Camera lerp, merge animations, and toast transitions become instant. Not "shorte
 
 ## Colour tokens
 
-Three accents and a substrate, no more. Every value traces to a documented source below; the two
-that involve a judgement call say so explicitly.
+Three accents and a substrate, no more, plus one non-pigment chrome surface that exists for a
+contrast reason rather than a palette one (below). Every value traces to a documented source; the
+ones that involve a judgement call say so explicitly.
 
 | Token | Value | Role | Source |
 |---|---|---|---|
-| `--substrate` | `#FAF7F2` | Canvas background, chrome background | Undyed natural straw. **Interpreted**, see note 1 |
+| `--substrate` | `#FAF7F2` | Canvas background | Undyed natural straw. **Interpreted**, see note 1 |
 | `--madder` | `#B8463A` | Selection ring, focus ring, active tool, offline banner | Madder lake, darker end. **Interpreted**, see note 2 |
 | `--charcoal` | `#2A2622` | All text, toolbar icons at rest, shape outlines at rest | Warm carbon black, not `#000000` |
 | `--indigo-overlay` | `#5B3A52` | Reserved: G2 version-scrubber "viewing history" | Purple of the museum piece. **Unused in Phase 1** |
+| `--chrome-surface` | `#FFFFFF` | The floating toolbar pill's own material | Not a pigment and not one of the four. Chrome needs a surface lighter than the substrate, or a cream pill on a cream board has no edge |
 
 Derived from `--charcoal` at reduced alpha: secondary text, panel edges, the dot grid. No derived
-token gets its own hex.
+token gets its own hex. `--chrome-surface` is not derived: a shadow cannot stand in for a fill.
 
 ### Why these values
 
@@ -181,13 +197,36 @@ implying the hex values are sampled from an artefact.
 
 ## Chrome layout
 
-**Vertical left-edge toolbar, always visible.** 44px wide, icon-only, tooltips on hover, one item per
-tool plus separator plus undo/redo.
+**Horizontal bottom-centre pill, hover-revealed.** A rounded container floating over the canvas on
+the bottom edge, one item per tool plus separator plus undo/redo, revealed when the pointer reaches the
+bottom edge. The reveal band is the **full 64px** of the bottom edge, not a hairline: the point of a
+hover-revealed toolbar is that nobody has to aim at it. A visible grip is parked at the bottom centre
+permanently, and it widens on hover — a hotspot with nothing to aim at is undiscoverable rather than
+tidy, and "the tools are down there somewhere" is exactly the failure mode this arrangement invites.
 
-Not the Figma bottom-centre pill: a hover-revealed toolbar is a discoverability tax, and Phase 1 has
-no command-palette muscle memory yet. Not a top bar: it puts persistent chrome where the top of the
-viewport should be. It costs 44px of an infinite surface, which is not a real cost. If it feels heavy
-it becomes hover-revealed in Phase 3, and that migration is a one-line visibility rule.
+The pill **floats over the board rather than occupying a lane**, so the infinite surface reaches all
+four edges. The earlier 44px left column is superseded.
+
+Three properties are not negotiable, because they are the cost of the arrangement:
+
+1. **The reveal is not hover-only.** `:focus-within` raises the pill as well. A toolbar a mouse can
+   summon but a keyboard cannot is a worse regression than the discoverability tax it trades for, and
+   this document's objection to the bottom pill was always about hover-revealed chrome, not about
+   placement. The collapsed state is therefore `opacity: 0` + `pointer-events: none` and **not**
+   `display: none` or `visibility: hidden`: both of those remove the buttons from the tab order, the
+   pill becomes unreachable by keyboard, and `:focus-within` can never fire — the exact regression the
+   rule exists to prevent. Nor is the pill slid below the viewport, because a focused element inside
+   an `overflow: hidden` container gets scrolled into view and the first Tab would shift the board.
+2. **The band is a real cost.** 64px of the bottom edge, full width, cannot be drawn into. It is
+   generous on purpose, and the trade is made knowingly: the 44px column it replaced was unavailable
+   at every height, but that column was at least visible. If drawing near the bottom edge turns out
+   to matter more than not having to aim, the band is one number.
+3. **The handle is not a control.** It carries no role and no label because it does nothing on click.
+   It is a target, not a button; making it focusable would add a keyboard stop that goes nowhere.
+
+Not a top bar: it puts persistent chrome where the top of the viewport should be. Not a hover-revealed
+*left* column, which is the same trade with a worse hit target — the bottom edge is where a pointer
+already travels on the way to a zoom control, and a pill centred there covers the least canvas.
 
 **Top-right cluster:** board name, sync indicator, and nothing else. Version history, settings, and
 the shape list are keyboard-driven and slide in as overlays.
@@ -253,7 +292,7 @@ loop directly.
 |---|---|---|
 | `<App>` | Shell, layout, keyboard routing | Owns the command table |
 | `<Board>` | The three-canvas stack | See [03 §2](./03-frontend.md#2-the-render-loop) |
-| `<Toolbar>` | Left-edge tool list | Always visible, 44px |
+| `<Toolbar>` | Bottom-centre tool pill | Rounded, floats over the board, hover- or focus-revealed |
 | `<ToolButton>` | One tool, icon + tooltip | `aria-pressed`, not `aria-selected` |
 | `<SyncIndicator>` | Local persistence state | Dot plus accessible text |
 | `<OfflineBanner>` | Amber banner when offline | C2 applies |

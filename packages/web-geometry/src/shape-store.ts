@@ -40,7 +40,14 @@
  */
 
 import type { Doc } from 'yjs'
-import { readShape, shapesMap, type Shape } from '@mesob/schema'
+import {
+  HIT_TOLERANCE,
+  distanceToPolyline,
+  distanceToSegment,
+  readShape,
+  shapesMap,
+  type Shape,
+} from '@mesob/schema'
 
 /** Floats per shape. Kept in one place because the stride is used by every accessor. */
 export const STRIDE = 12
@@ -407,8 +414,13 @@ export class ShapeStore {
    * could have dropped, and it must never drop one it should keep. Tightening it would
    * mean storing a second set of floats per shape, for a bound that only matters for
    * ellipses and only as an optimisation.
+   *
+   * `tolerance` is the grab radius for the types with no interior — a line and a pen are
+   * strokes, so "contains" means "close to". It is in world units and the caller divides
+   * the zoom out of a screen-pixel radius, exactly as `hitHandle` does; a stroke hit-tested
+   * at a fixed world radius is ungrabbable at 0.05x and impossible to hit at 8x.
    */
-  hitTest(worldX: number, worldY: number): number {
+  hitTest(worldX: number, worldY: number, tolerance = HIT_TOLERANCE): number {
     for (let i = this.count - 1; i >= 0; i--) {
       if (
         this.f(i, Field.MaxX) < worldX ||
@@ -418,21 +430,44 @@ export class ShapeStore {
       ) {
         continue
       }
-      const x = this.f(i, Field.X)
-      const y = this.f(i, Field.Y)
-      const w = this.f(i, Field.W)
-      const h = this.f(i, Field.H)
-      const rotation = this.f(i, Field.Rotation)
-      // The store keeps the parsed shapes alongside the floats rather than a parallel
-      // type array, so the discriminant is one indexed read rather than a second
-      // structure that could disagree with the first.
-      const inside =
-        this.shapeAt(i)?.type === 'ellipse'
-          ? containsEllipsePoint(x, y, w, h, worldX, worldY, rotation)
-          : containsPoint(x, y, w, h, worldX, worldY, rotation)
-      if (inside) return i
+      if (this.containsPoint(i, worldX, worldY, tolerance)) return i
     }
     return -1
+  }
+
+  /**
+   * The precise test for one shape, dispatched on its discriminant.
+   *
+   * A switch with no default branch, so a type that reaches the store without a case here
+   * is a compile error rather than a shape the cull keeps and the click never finds. The
+   * only non-exhaustive case is the `!shape` one, and that returns false: a dense index
+   * with no shape behind it cannot be drawn, and a hit test that could find it would
+   * select something invisible.
+   */
+  private containsPoint(i: number, worldX: number, worldY: number, tolerance: number): boolean {
+    const shape = this.shapeAt(i)
+    if (!shape) return false
+    switch (shape.type) {
+      case 'rect':
+      case 'note':
+        return containsPoint(shape.x, shape.y, shape.w, shape.h, worldX, worldY, shape.rotation)
+      case 'ellipse':
+        return containsEllipsePoint(
+          shape.x,
+          shape.y,
+          shape.w,
+          shape.h,
+          worldX,
+          worldY,
+          shape.rotation,
+        )
+      case 'line':
+        return (
+          distanceToSegment(worldX, worldY, shape.x1, shape.y1, shape.x2, shape.y2) <= tolerance
+        )
+      case 'pen':
+        return distanceToPolyline(shape.points, worldX, worldY) <= tolerance
+    }
   }
 
   /** Indices of shapes overlapping a world rectangle, topmost first. Writes into `out`. */

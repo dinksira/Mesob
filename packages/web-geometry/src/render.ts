@@ -21,7 +21,7 @@
  * never be mistaken for a current one.
  */
 
-import type { ViewportTransform } from '@mesob/schema'
+import type { LineShape, NoteShape, PenShape, ViewportTransform } from '@mesob/schema'
 import { visibleBounds } from '@mesob/schema'
 import { Field, type ShapeStore } from './shape-store.js'
 
@@ -66,6 +66,13 @@ export interface RenderContext {
   strokeRect(x: number, y: number, w: number, h: number): void
   translate(x: number, y: number): void
   rotate(angle: number): void
+
+  /* Text, for notes. The one place this renderer is allowed to be expensive: shaping a
+   * line of text and measuring the next one is a browser call, and there is no way to draw
+   * a note's text without it. Notes are few and short, so the cost lands where a user is
+   * typing rather than across 5,000 shapes. Everything above stays allocation-free. */
+  fillText(text: string, x: number, y: number): void
+  measureText(text: string): { width: number }
   /**
    * The real context's own union, not `string`.
    *
@@ -79,6 +86,9 @@ export interface RenderContext {
   fillStyle: string | CanvasGradient | CanvasPattern
   strokeStyle: string | CanvasGradient | CanvasPattern
   lineWidth: number
+  font: string
+  textAlign: string
+  textBaseline: string
 }
 
 export interface BoardStyle {
@@ -94,6 +104,31 @@ export const HANDLE_SIZE = 8
 const TAU = Math.PI * 2
 export const SELECTION_STROKE = 1.5
 export const MARQUEE_STROKE = 1
+
+/** Arrowhead length, as a fraction of zoom so it grows with the shape it labels. */
+const ARROW_HEAD_SIZE = 12
+/** Half-angle of each arm, in radians. A little under 30° is a filled-looking V. */
+const ARROW_HEAD_SPREAD = (25 * Math.PI) / 180
+
+/** Note text metrics, in world units at zoom 1. */
+const NOTE_FONT_SIZE = 14
+const NOTE_PADDING = 8
+const NOTE_LINE_HEIGHT = 1.4
+const NOTE_TEXT_COLOR = '#2a2622'
+
+/**
+ * The font stack for note text.
+ *
+ * The Ethiopic families are the whole point of listing them rather than naming one generic
+ * sans. G1's acceptance criterion is that Amharic renders without tofu, and a browser given
+ * only `system-ui` will happily fall back to a face with no Ethiopic coverage and draw a row
+ * of boxes — on a machine that passes every automated check, because the text is not
+ * measured, only present. `Nyala` is the family Windows ships, `Noto Sans Ethiopic` is the
+ * cross-platform one, and the generic `sans-serif` at the end is the last resort rather than
+ * the first.
+ */
+const NOTE_FONT_FAMILY =
+  'system-ui, -apple-system, "Segoe UI", "Noto Sans Ethiopic", "Nyala", "Abyssinica SIL", sans-serif'
 
 /**
  * Scratch buffer for culled indices, owned by the caller.
@@ -161,6 +196,12 @@ export class BoardRenderer {
   }
 
   private drawShape(ctx: RenderContext, t: ViewportTransform, i: number): void {
+    const shape = this.store.shapeAt(i)
+    // A dense index with no shape behind it cannot be drawn. Returning rather than falling
+    // through keeps the switch below free of a default branch, which is what makes adding a
+    // shape type a compile error here instead of a shape that silently stops rendering.
+    if (!shape) return
+
     const fill = this.store.fillColorAt(i)
     if (fill !== this.fillStyle) {
       ctx.fillStyle = fill
@@ -194,18 +235,197 @@ export class BoardRenderer {
     // The transform above is already about the centre and the shape's own rotation, so
     // the path is built centred on the origin and unrotated. The only type-specific
     // decision is which primitive spans the box; the fill, stroke, and width above it
-    // are already shared, and the selection chrome below draws the same box for both.
-    switch (this.store.shapeAt(i)?.type) {
+    // are already shared, and the selection chrome below draws the same box for all.
+    switch (shape.type) {
       case 'rect':
+      case 'note':
         ctx.rect(-w / 2, -h / 2, w, h)
         break
       case 'ellipse':
         ctx.ellipse(0, 0, Math.abs(w) / 2, Math.abs(h) / 2, 0, 0, TAU)
         break
+      case 'line':
+        this.linePath(
+          ctx,
+          shape,
+          this.store.x(i) + this.store.w(i) / 2,
+          this.store.y(i) + this.store.h(i) / 2,
+          t.zoom,
+        )
+        break
+      case 'pen':
+        this.strokePath(
+          ctx,
+          shape,
+          this.store.x(i) + this.store.w(i) / 2,
+          this.store.y(i) + this.store.h(i) / 2,
+          t.zoom,
+        )
+        break
     }
-    ctx.fill()
+
+    // Only the types with an interior are filled. A line and a stroke are open paths, and
+    // filling one either paints nothing or paints the region the implicit closing edge
+    // happens to enclose — for a freehand loop, a shape the user never drew. The default
+    // style for both is already `transparent`, so this is belt and braces against a peer
+    // that set a fill on a stroke.
+    if (shape.type === 'rect' || shape.type === 'ellipse' || shape.type === 'note') ctx.fill()
     if (this.store.strokeWidth(i) > 0) ctx.stroke()
+
+    if (shape.type === 'line' && shape.head) {
+      this.arrowHead(
+        ctx,
+        shape,
+        this.store.x(i) + this.store.w(i) / 2,
+        this.store.y(i) + this.store.h(i) / 2,
+        t.zoom,
+      )
+    }
+    if (shape.type === 'note') this.noteText(ctx, t, shape, w, h)
     ctx.restore()
+  }
+
+  /**
+   * A segment, positioned by its endpoints rather than by its box.
+   *
+   * The box of a line is the box of its endpoints, so the two describe the same segment and
+   * the box diagonal would do. Reading the endpoints anyway is one subtraction each and means
+   * the drawn line cannot disagree with the stored geometry if the two ever drift — which
+   * is the same reason the box is recomputed in `boundsFor` rather than trusted.
+   *
+   * The offsets are in *world* units and are multiplied by the zoom here, because the
+   * context is already translated to the shape's centre in screen space. Subtracting a
+   * screen coordinate from a world one — which is what this did at first — yields a path
+   * that moves with the camera and is off-screen by half the viewport at the world origin:
+   * every line drew from the centre of the screen to somewhere over on the left.
+   */
+  private linePath(
+    ctx: RenderContext,
+    shape: LineShape,
+    worldCx: number,
+    worldCy: number,
+    zoom: number,
+  ): void {
+    ctx.moveTo((shape.x1 - worldCx) * zoom, (shape.y1 - worldCy) * zoom)
+    ctx.lineTo((shape.x2 - worldCx) * zoom, (shape.y2 - worldCy) * zoom)
+  }
+
+  /** A freehand run, as a polyline. One point is a dot, which a single tap of the pen is. */
+  private strokePath(
+    ctx: RenderContext,
+    shape: PenShape,
+    worldCx: number,
+    worldCy: number,
+    zoom: number,
+  ): void {
+    const points = shape.points
+    if (points.length < 2) return
+    ctx.moveTo(((points[0] ?? 0) - worldCx) * zoom, ((points[1] ?? 0) - worldCy) * zoom)
+    for (let i = 2; i + 1 < points.length; i += 2) {
+      ctx.lineTo(((points[i] ?? 0) - worldCx) * zoom, ((points[i + 1] ?? 0) - worldCy) * zoom)
+    }
+  }
+
+  /**
+   * The arrowhead, which is the only difference between a line and an arrow.
+   *
+   * Two arms at a fixed spread from the direction of travel, drawn as their own sub-path so
+   * the shaft's round join does not bulge at the tip. Scaled by zoom like everything else,
+   * so a head at 8x is visibly bigger rather than the same 12 pixels as at 1x.
+   *
+   * Built in the same local space as the shaft, from the same world centre: the tip is the
+   * far endpoint in local coordinates, not the endpoint in world coordinates, or the head
+   * lands at a screen position that has nothing to do with the line it belongs to.
+   */
+  private arrowHead(
+    ctx: RenderContext,
+    shape: LineShape,
+    worldCx: number,
+    worldCy: number,
+    zoom: number,
+  ): void {
+    const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1)
+    const size = ARROW_HEAD_SIZE * zoom
+    const spread = ARROW_HEAD_SPREAD
+    const tipX = (shape.x2 - worldCx) * zoom
+    const tipY = (shape.y2 - worldCy) * zoom
+    ctx.beginPath()
+    ctx.moveTo(tipX, tipY)
+    ctx.lineTo(tipX - size * Math.cos(angle - spread), tipY - size * Math.sin(angle - spread))
+    ctx.moveTo(tipX, tipY)
+    ctx.lineTo(tipX - size * Math.cos(angle + spread), tipY - size * Math.sin(angle + spread))
+    ctx.stroke()
+  }
+
+  /**
+   * A note's text, wrapped to the note's box.
+   *
+   * Greedy on spaces, and a hard newline ends a line rather than becoming a space — which
+   * is the difference between a note that reads the way it was typed and one where every
+   * paragraph runs together.
+   *
+   * `textBaseline` is `top` and the first line starts one padding below the note's own top
+   * edge, which is exactly where the DOM `<textarea>` over this note puts its first line for
+   * the same padding and line height. That agreement is the reason those two constants exist
+   * in both files: a canvas caret and a DOM caret that disagree by a line height is an editor
+   * the user cannot read what they are typing over.
+   *
+   * `fillStyle` is reassigned *and* the cached value updated, because the next shape's
+   * style batching compares against that cache. Setting the context without updating the
+   * cache would make every following shape re-set its fill, which is correct-looking and
+   * throws away exactly the optimisation this file exists for.
+   */
+  private noteText(
+    ctx: RenderContext,
+    t: ViewportTransform,
+    shape: NoteShape,
+    w: number,
+    h: number,
+  ): void {
+    if (shape.text === '') return
+
+    const fontSize = Math.max(4, NOTE_FONT_SIZE * t.zoom)
+    const padding = NOTE_PADDING * t.zoom
+    const lineHeight = fontSize * NOTE_LINE_HEIGHT
+    const maxWidth = w - padding * 2
+    if (maxWidth <= 0) return
+
+    ctx.font = `${String(fontSize)}px ${NOTE_FONT_FAMILY}`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    const text = NOTE_TEXT_COLOR
+    if (text !== this.fillStyle) {
+      ctx.fillStyle = text
+      this.fillStyle = text
+    }
+
+    const left = -w / 2 + padding
+    // The clip is checked before every draw rather than after the paragraph, because the
+    // last line of a paragraph is drawn after the loop and a check that only ran at the end
+    // of the paragraph would let that one line land outside the note.
+    const floor = h / 2 - padding
+    let y = -h / 2 + padding
+
+    const emit = (line: string): boolean => {
+      if (y > floor) return false
+      ctx.fillText(line, left, y)
+      y += lineHeight
+      return true
+    }
+
+    for (const paragraph of shape.text.split('\n')) {
+      let line = ''
+      for (const word of paragraph.split(' ')) {
+        const candidate = line === '' ? word : `${line} ${word}`
+        if (line !== '' && ctx.measureText(candidate).width > maxWidth) {
+          if (!emit(line)) return
+          line = word
+        } else {
+          line = candidate
+        }
+      }
+      if (!emit(line)) return
+    }
   }
 
   /**
@@ -313,6 +533,70 @@ export class BoardRenderer {
       (maxX - minX) * t.zoom,
       (maxY - minY) * t.zoom,
     )
+  }
+
+  /**
+   * A line in progress, in world coordinates.
+   *
+   * Separate from `drawShape` because this has no shape: the line being dragged does not
+   * exist in the document until the pointer comes up, and the overlay is where a thing that
+   * does not exist yet belongs. It is also the one draw that cannot use the store, which is
+   * why it takes endpoints directly.
+   */
+  drawSegment(
+    ctx: RenderContext,
+    t: ViewportTransform,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    color: string,
+  ): void {
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo((x1 - t.cameraX) * t.zoom + t.width / 2, (y1 - t.cameraY) * t.zoom + t.height / 2)
+    ctx.lineTo((x2 - t.cameraX) * t.zoom + t.width / 2, (y2 - t.cameraY) * t.zoom + t.height / 2)
+    ctx.stroke()
+  }
+
+  /**
+   * A freehand stroke in progress, from the caller's own buffer.
+   *
+   * Takes the buffer rather than a `number[]` because the caller holds a `Float32Array` that
+   * it reuses for every stroke and must not hand to a draw call that would allocate. Counted
+   * in points, so the buffer's spare capacity is not drawn.
+   *
+   * A single point draws nothing: `moveTo` with no `lineTo` followed by `stroke` is a
+   * zero-length subpath, which the canvas spec says a line cap may render as a dot and
+   * nothing promises it will. A real pen commits a tap as a dot by duplicating its one
+   * point, so the dot appears on pointer-up rather than flickering in and out during the
+   * tap.
+   */
+  drawStroke(
+    ctx: RenderContext,
+    t: ViewportTransform,
+    points: ArrayLike<number>,
+    count: number,
+    color: string,
+  ): void {
+    if (count < 2) return
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    const halfW = t.width / 2
+    const halfH = t.height / 2
+    ctx.moveTo(
+      ((points[0] ?? 0) - t.cameraX) * t.zoom + halfW,
+      ((points[1] ?? 0) - t.cameraY) * t.zoom + halfH,
+    )
+    for (let i = 1; i < count; i++) {
+      ctx.lineTo(
+        ((points[i * 2] ?? 0) - t.cameraX) * t.zoom + halfW,
+        ((points[i * 2 + 1] ?? 0) - t.cameraY) * t.zoom + halfH,
+      )
+    }
+    ctx.stroke()
   }
 }
 

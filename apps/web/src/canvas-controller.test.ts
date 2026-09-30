@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalize, resizeRect } from './canvas-controller.js'
+import { normalize, resizeRect, simplifyStroke } from './canvas-controller.js'
 
 /**
  * The two pure geometry helpers in the controller.
@@ -99,5 +99,88 @@ describe('resizeRect', () => {
     const once = resizeRect(X, Y, W, H, 2, 150, 100)
     const back = resizeRect(once.x, once.y, once.w, once.h, 2, X + W, Y + H)
     expect(back).toEqual({ x: X, y: Y, w: W, h: H })
+  })
+})
+
+/**
+ * The pen's simplifier, which is the only part of drawing that is a real algorithm.
+ *
+ * Tested here rather than through the controller because the controller can only reach it
+ * with a pointer, and a pointer cannot say "a thousand collinear points". The properties
+ * that matter � the endpoints survive, a straight line collapses, a real corner does not,
+ * and it terminates on a pathological input � are all invisible from a drag.
+ */
+describe('simplifyStroke', () => {
+  const run = (points: number[], tolerance: number) =>
+    simplifyStroke(new Float32Array(points), points.length / 2, tolerance)
+
+  it('keeps a stroke with fewer than three points exactly as it is', () => {
+    // Nothing to simplify. A two-point run is already a line, and a one-point run is a dot
+    // the commit path duplicates � neither may gain or lose a coordinate here.
+    expect(run([0, 0, 10, 10], 0.6)).toEqual([0, 0, 10, 10])
+    expect(run([3, 4], 0.6)).toEqual([3, 4])
+    expect(run([], 0.6)).toEqual([])
+  })
+
+  it('collapses a straight run to its endpoints', () => {
+    // The case the whole thing exists for. A fast drag along a straight path samples a
+    // hundred positions that describe a line, and storing them means a hundred points of
+    // update log for a shape with no detail in it.
+    expect(run([0, 0, 10, 0, 20, 0, 30, 0, 40, 0], 0.6)).toEqual([0, 0, 40, 0])
+  })
+
+  it('keeps the corner of an L, because that is the shape', () => {
+    // The counterweight to the test above. A tolerance that is too aggressive turns an L
+    // into a line, which is not a simplification at all but a different drawing.
+    expect(run([0, 0, 50, 0, 50, 50], 0.6)).toEqual([0, 0, 50, 0, 50, 50])
+  })
+
+  it('keeps a point further from the line than the tolerance, and drops the others', () => {
+    expect(run([0, 0, 50, 5, 100, 0], 0.6)).toEqual([0, 0, 50, 5, 100, 0])
+    expect(run([0, 0, 50, 0.2, 100, 0], 0.6)).toEqual([0, 0, 100, 0])
+  })
+
+  it('scales with the tolerance, so a zoomed-in stroke keeps more of its detail', () => {
+    // This is why the tolerance is a caller argument and not a constant in here: 0.6px at
+    // zoom 1 is a different distance in world units at zoom 8, and the controller is the
+    // only thing that knows which.
+    const points = [0, 0, 50, 2, 100, 0]
+    expect(run(points, 0.5)).toEqual([0, 0, 50, 2, 100, 0])
+    expect(run(points, 8)).toEqual([0, 0, 100, 0])
+  })
+
+  it('always keeps the first and last point, even for a single spike', () => {
+    // A stroke that lost its endpoints would not start or stop where the user did, which is
+    // worse than any extra point.
+    expect(run([0, 0, 50, 20, 100, 0], 0.6)[0]).toBe(0)
+    const out = run([0, 0, 50, 20, 100, 0], 0.6)
+    expect(out[out.length - 2]).toBe(100)
+    expect(out[out.length - 1]).toBe(0)
+  })
+
+  it('terminates on a run of identical points, where the segment has no length', () => {
+    // The recursive form divides by the span length, and a zero-length span gives NaN for
+    // every distance. `NaN > tolerance` is false, so nothing is ever marked and the loop
+    // ends � but a version that instead did `if (distance > worst) worst = i` would keep
+    // splitting forever. This is the input that distinguishes those two.
+    expect(run([5, 5, 5, 5, 5, 5, 5, 5], 0.6)).toEqual([5, 5, 5, 5])
+  })
+
+  it('terminates on a long run, without recursing once per point', () => {
+    // A deliberate stack rather than recursion, and a thousand points is the smallest
+    // scribble that would blow a recursive frame budget. If this ever starts failing with a
+    // range error the recursion is back.
+    const many: number[] = []
+    for (let i = 0; i < 2000; i++) many.push(i, i % 3)
+    const out = run(many, 0.6)
+    expect(out.length).toBeGreaterThan(2)
+    expect(out.length).toBeLessThanOrEqual(many.length)
+  })
+
+  it('returns a plain array, so it can go into the document as one value', () => {
+    // Not a Float32Array: the document stores what it stores, and a typed array in a Y.Map
+    // is stored as an object that reads back as `{}` on the next peer.
+    const out = run([0, 0, 10, 0], 0.6)
+    expect(Array.isArray(out)).toBe(true)
   })
 })

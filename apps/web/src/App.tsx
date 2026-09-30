@@ -91,7 +91,14 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target
-      if (target instanceof HTMLElement && (target.isContentEditable || target.tagName === 'INPUT'))
+      // Text entry wins over every shortcut. A window-level shortcut that survives while
+      // someone is typing takes the note's letters away from the note, and `v` is a letter
+      // as much as it is a tool. `TEXTAREA` is here for the note editor; the board's own
+      // shortcuts are bound to the canvas, which the caret is never in.
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+      )
         return
       if (event.ctrlKey || event.metaKey || event.altKey) return
       const key = event.key.toLowerCase()
@@ -106,14 +113,6 @@ export function App() {
 
   return (
     <div className="app">
-      <Toolbar
-        tool={tool}
-        onToolChange={setTool}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        onUndo={onUndo}
-        onRedo={onRedo}
-      />
       <div className="stage">
         <Board
           doc={doc}
@@ -122,6 +121,26 @@ export function App() {
           }}
         />
         {shapeCount === 0 && <EmptyState toolLabel={TOOL_LABELS[tool]} />}
+        {/* Inside the stage, not beside it. The toolbar floats over the board, so the stage
+            is the positioning context that gives it the bottom edge to float on — and the
+            infinite surface now reaches the left edge, which is the point of the pill.
+
+            The strip is the hover band and the handle is the affordance. Both are inert
+            hooks for the stylesheet, not controls: nothing to click, nothing to announce.
+            Ordering matters, because the handle's hover state is a sibling selector off
+            `.toolbar:focus-within`, so the pill has to come first. */}
+        <div className="toolbar-dock">
+          <span className="toolbar-dock-strip" aria-hidden="true" />
+          <Toolbar
+            tool={tool}
+            onToolChange={setTool}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
+          />
+          <span className="toolbar-handle" aria-hidden="true" />
+        </div>
         <div className="cluster">
           <span className="board-name">Untitled board</span>
           <SyncIndicator state={sync} shapeCount={shapeCount} />
